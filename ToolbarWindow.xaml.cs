@@ -1,8 +1,12 @@
+using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
+using ScienceWordOverlay.Utils;
 
 namespace ScienceWordOverlay
 {
@@ -10,26 +14,45 @@ namespace ScienceWordOverlay
     {
         private readonly OverlayWindow _overlay;
         private bool _collapsed = false;
+        private readonly DispatcherTimer _appPollTimer;
 
         public ToolbarWindow(OverlayWindow overlay)
         {
             InitializeComponent();
             _overlay = overlay;
             PreviewKeyDown += (_, e) => _overlay.Surface.HandleKeyDown(e);
+
+            // Tự động theo dõi ứng dụng đang mở phía sau (Word, PowerPoint, Excel, Paint, Web, PDF...)
+            _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+            _appPollTimer.Tick += OnPollForegroundApp;
+            _appPollTimer.Start();
+        }
+
+        private void OnPollForegroundApp(object? sender, EventArgs e)
+        {
+            var (hwnd, procName, _) = Win32Helper.GetForegroundAppInfo();
+            if (hwnd == IntPtr.Zero) return;
+
+            var myHwnd = new WindowInteropHelper(this).Handle;
+            var ovHwnd = new WindowInteropHelper(_overlay).Handle;
+            if (hwnd == myHwnd || hwnd == ovHwnd) return;
+            if (string.Equals(procName, "ScienceWord_Overlay_Pro", StringComparison.OrdinalIgnoreCase)) return;
+
+            _overlay.Surface.LastTargetHwnd = hwnd;
+            _overlay.Surface.LastTargetProcName = procName;
+            TxtTargetApp.Text = "Đích: " + Win32Helper.FriendlyAppName(procName);
         }
 
         private void Grip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.LeftButton == MouseButtonState.Pressed)
-                DragMove();
+            if (e.LeftButton == MouseButtonState.Pressed) DragMove();
         }
 
         private void Tool_Click(object sender, RoutedEventArgs e)
         {
             if (sender is RadioButton rb && rb.Tag is string tag)
             {
-                if (BtnPassthrough.IsChecked == true)
-                    BtnPassthrough.IsChecked = false;
+                if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
                 _overlay.Surface.SetTool(tag);
             }
         }
@@ -62,7 +85,7 @@ namespace ScienceWordOverlay
             if (sender is Button btn && btn.Tag is string hex)
             {
                 _overlay.Surface.FillColorHex = hex;
-                _overlay.Surface.ShowToast($"Đã chọn màu tô / dạ quang: {hex}");
+                _overlay.Surface.ShowToast($"Đã chọn màu tô / Đũa thần: {hex}");
             }
         }
 
@@ -71,9 +94,7 @@ namespace ScienceWordOverlay
             if (_overlay == null) return;
             if (CbWidth.SelectedItem is ComboBoxItem item && item.Tag is string s &&
                 double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double w))
-            {
                 _overlay.Surface.StrokeWidth = w;
-            }
         }
 
         private void CbPattern_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -106,16 +127,13 @@ namespace ScienceWordOverlay
             _overlay.Surface.InvalidateVisual();
         }
 
-        private void ChkWhiteBg_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_overlay == null) return;
-            _overlay.Surface.ExportWhiteBg = (sender as CheckBox)?.IsChecked == true;
-        }
-
         private void BtnUndo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Undo();
         private void BtnRedo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Redo();
         private void BtnClear_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ClearAll();
-        private void BtnCopyWord_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CopyToClipboard();
+        private void BtnSyncOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SyncFromOffice();
+        private void BtnFillOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.FillSelectedOfficeShape();
+        private void BtnInsertApp_Click(object sender, RoutedEventArgs e) => _overlay.Surface.InsertIntoTargetApp();
+        private void BtnCopyPng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CopyToClipboard();
         private void BtnSavePng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SavePng();
 
         private void BtnCollapse_Click(object sender, RoutedEventArgs e)
@@ -127,6 +145,7 @@ namespace ScienceWordOverlay
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)
         {
+            _appPollTimer.Stop();
             Application.Current.Shutdown();
         }
     }

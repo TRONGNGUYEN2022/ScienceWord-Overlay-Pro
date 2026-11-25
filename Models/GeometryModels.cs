@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media.Imaging;
 
 namespace ScienceWordOverlay.Models
 {
@@ -15,22 +17,22 @@ namespace ScienceWordOverlay.Models
     public class GeoShape
     {
         public string Id { get; set; } = "";
-        public string Type { get; set; } = "segment"; // segment | vector | circle
+        public string Type { get; set; } = "segment";
         public string P1Id { get; set; } = "";
         public string P2Id { get; set; } = "";
         public string ColorHex { get; set; } = "#0F172A";
         public double StrokeWidth { get; set; } = 2.4;
-        public string DashStyle { get; set; } = "solid"; // solid | dashed | dotted
+        public string DashStyle { get; set; } = "solid";
     }
 
     public class GeoRegion
     {
         public string Id { get; set; } = "";
-        public string Type { get; set; } = "polygon"; // polygon | angle
+        public string Type { get; set; } = "polygon";
         public List<string> PointIds { get; set; } = new();
         public string ColorHex { get; set; } = "#3B82F6";
         public double Opacity { get; set; } = 0.30;
-        public string Pattern { get; set; } = "solid"; // solid | hatch | cross | dots
+        public string Pattern { get; set; } = "solid";
     }
 
     public class GeoMarker
@@ -61,6 +63,13 @@ namespace ScienceWordOverlay.Models
         public string Text { get; set; } = "";
         public string ColorHex { get; set; } = "#0F172A";
         public double FontSize { get; set; } = 22;
+    }
+
+    public class MagicFillLayer
+    {
+        public string Id { get; set; } = "";
+        public BitmapSource Bitmap { get; set; } = null!;
+        public Rect BoundsDip { get; set; }
     }
 
     public class SceneState
