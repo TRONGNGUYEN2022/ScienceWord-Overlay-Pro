@@ -11,10 +11,10 @@ namespace ScienceWordOverlay
             overlay.Show();
 
             var toolbar = new ToolbarWindow(overlay);
-            toolbar.Owner = overlay; // Khóa thanh công cụ luôn nằm TRÊN lớp vẽ trong suốt, sửa dứt điểm lỗi dính lệnh!
+            toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal (Office COM + Đũa thần PDF/Web/Paint) đã sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v4 (Khớp tọa độ + Snip + Quay 3D tính V) sẵn sàng!");
         }
     }
 }

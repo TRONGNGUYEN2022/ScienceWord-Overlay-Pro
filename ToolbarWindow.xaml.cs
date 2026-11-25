@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ScienceWordOverlay.Models;
 using ScienceWordOverlay.Utils;
 
 namespace ScienceWordOverlay
@@ -15,6 +16,8 @@ namespace ScienceWordOverlay
         private readonly OverlayWindow _overlay;
         private bool _collapsed = false;
         private readonly DispatcherTimer _appPollTimer;
+        private readonly DispatcherTimer _revAnimTimer;
+        private bool _isAnimatingRev = false;
 
         public ToolbarWindow(OverlayWindow overlay)
         {
@@ -22,10 +25,14 @@ namespace ScienceWordOverlay
             _overlay = overlay;
             PreviewKeyDown += (_, e) => _overlay.Surface.HandleKeyDown(e);
 
-            // Tự động theo dõi ứng dụng đang mở phía sau (Word, PowerPoint, Excel, Paint, Web, PDF...)
+            _overlay.Surface.MetricsUpdated += txt => TxtMetrics.Text = txt;
+
             _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
             _appPollTimer.Tick += OnPollForegroundApp;
             _appPollTimer.Start();
+
+            _revAnimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            _revAnimTimer.Tick += OnRevAnimTick;
         }
 
         private void OnPollForegroundApp(object? sender, EventArgs e)
@@ -85,7 +92,8 @@ namespace ScienceWordOverlay
             if (sender is Button btn && btn.Tag is string hex)
             {
                 _overlay.Surface.FillColorHex = hex;
-                _overlay.Surface.ShowToast($"Đã chọn màu tô / Đũa thần: {hex}");
+                _overlay.Surface.InvalidateVisual();
+                _overlay.Surface.ShowToast($"Đã chọn màu tô / 3D: {hex}");
             }
         }
 
@@ -101,32 +109,24 @@ namespace ScienceWordOverlay
         {
             if (_overlay == null) return;
             if (CbPattern.SelectedItem is ComboBoxItem item && item.Tag is string pat)
+            {
                 _overlay.Surface.FillPattern = pat;
+                _overlay.Surface.InvalidateVisual();
+            }
         }
 
         private void SlOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (_overlay == null) return;
             _overlay.Surface.FillOpacity = e.NewValue / 100.0;
+            _overlay.Surface.InvalidateVisual();
         }
+
+        private void BtnSnipCapture_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CaptureSnipToClipboard();
+        private void BtnSnipFill_Click(object sender, RoutedEventArgs e) => _overlay.Surface.FillSnipRegion();
 
         private void PresetPyramid_Click(object sender, RoutedEventArgs e) => _overlay.Surface.InsertPreset3D("pyramid");
         private void PresetCube_Click(object sender, RoutedEventArgs e) => _overlay.Surface.InsertPreset3D("cube");
-
-        private void ChkTools_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_overlay == null) return;
-            _overlay.Surface.ShowVirtualTools = (sender as CheckBox)?.IsChecked == true;
-            _overlay.Surface.InvalidateVisual();
-        }
-
-        private void ChkLabels_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_overlay == null) return;
-            _overlay.Surface.ShowLabels = (sender as CheckBox)?.IsChecked == true;
-            _overlay.Surface.InvalidateVisual();
-        }
-
         private void BtnUndo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Undo();
         private void BtnRedo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Redo();
         private void BtnClear_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ClearAll();
@@ -136,16 +136,108 @@ namespace ScienceWordOverlay
         private void BtnCopyPng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CopyToClipboard();
         private void BtnSavePng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SavePng();
 
+        // ================= KHOI TRON XOAY 3D & TINH THE TICH V =================
+        private void BtnRevArea_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
+            _overlay.Surface.RevMode = MathRenderMode.Area2D;
+            BtnRevArea.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            BtnRev3D.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
+            _overlay.Surface.NotifyMetrics();
+            _overlay.Surface.InvalidateVisual();
+        }
+
+        private void BtnRev3D_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
+            _overlay.Surface.RevMode = MathRenderMode.Solid3D;
+            BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
+            _overlay.Surface.NotifyMetrics();
+            _overlay.Surface.InvalidateVisual();
+        }
+
+        private void BtnRevAnim_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
+            if (_overlay.Surface.RevScene == null) return;
+
+            if (_isAnimatingRev)
+            {
+                _isAnimatingRev = false;
+                _revAnimTimer.Stop();
+                BtnRevAnim.Content = "▶ Xoay 0°-360°";
+            }
+            else
+            {
+                _overlay.Surface.RevMode = MathRenderMode.Solid3D;
+                BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+                BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
+                SlRevAngle.Value = 0;
+                _isAnimatingRev = true;
+                BtnRevAnim.Content = "⏸ Dừng xoay";
+                _revAnimTimer.Start();
+            }
+        }
+
+        private void OnRevAnimTick(object? sender, EventArgs e)
+        {
+            double next = SlRevAngle.Value + 5.0;
+            if (next >= 360.0)
+            {
+                next = 360.0;
+                _isAnimatingRev = false;
+                _revAnimTimer.Stop();
+                BtnRevAnim.Content = "▶ Xoay 0°-360°";
+            }
+            SlRevAngle.Value = next;
+        }
+
+        private void SlRevAngle_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_overlay == null) return;
+            _overlay.Surface.RevSweepDeg = e.NewValue;
+            if (TxtRevAngle != null) TxtRevAngle.Text = $"Góc: {e.NewValue:0}°";
+            _overlay.Surface.InvalidateVisual();
+        }
+
+        private void ChkRevCaps_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_overlay == null) return;
+            _overlay.Surface.RevShowCaps = (sender as CheckBox)?.IsChecked == true;
+            _overlay.Surface.InvalidateVisual();
+        }
+
+        private void BtnRevSwap_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.SwapAxisAndCurve())
+            {
+                _overlay.Surface.NotifyMetrics();
+                _overlay.Surface.InvalidateVisual();
+                _overlay.Surface.ShowToast("Đã đổi trục quay & đường cong sinh!");
+            }
+        }
+
+        private void BtnRevClear_Click(object sender, RoutedEventArgs e)
+        {
+            _overlay.Surface.RevScene = null;
+            _overlay.Surface.NotifyMetrics();
+            _overlay.Surface.InvalidateVisual();
+        }
+
         private void BtnCollapse_Click(object sender, RoutedEventArgs e)
         {
             _collapsed = !_collapsed;
-            Row2Panel.Visibility = _collapsed ? Visibility.Collapsed : Visibility.Visible;
+            var vis = _collapsed ? Visibility.Collapsed : Visibility.Visible;
+            Row2Panel.Visibility = vis;
+            Row3Panel.Visibility = vis;
             BtnCollapse.Content = _collapsed ? "▼" : "▲";
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)
         {
             _appPollTimer.Stop();
+            _revAnimTimer.Stop();
             Application.Current.Shutdown();
         }
     }

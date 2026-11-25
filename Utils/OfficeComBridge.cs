@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
+using ScienceWordOverlay.Models;
 
 namespace ScienceWordOverlay.Utils
 {
@@ -12,6 +13,7 @@ namespace ScienceWordOverlay.Utils
     {
         public List<Point> ScreenPoints { get; set; } = new();
         public bool IsLine { get; set; }
+        public double DiagSpan { get; set; }
     }
 
     public class OfficeSelectionContext
@@ -27,6 +29,7 @@ namespace ScienceWordOverlay.Utils
         public int RefRelV { get; set; } = 1;
         public object? RefAnchor { get; set; }
         public List<OfficeExtractedContour> Contours { get; set; } = new();
+        public RevolutionScene? Revolution { get; set; }
         public string Summary { get; set; } = "";
     }
 
@@ -58,7 +61,6 @@ namespace ScienceWordOverlay.Utils
             if (p == "EXCEL") return ReadFromExcel(dpiScaleX, dpiScaleY, out error);
             if (p == "WINWORD") return ReadFromWord(dpiScaleX, dpiScaleY, out error);
 
-            // Tự thử lần lượt Word -> PowerPoint -> Excel
             var ctx = ReadFromWord(dpiScaleX, dpiScaleY, out error);
             if (ctx != null) return ctx;
             ctx = ReadFromPowerPoint(dpiScaleX, dpiScaleY, out error);
@@ -66,7 +68,7 @@ namespace ScienceWordOverlay.Utils
             ctx = ReadFromExcel(dpiScaleX, dpiScaleY, out error);
             if (ctx != null) return ctx;
 
-            error = "Không tìm thấy đối tượng đang chọn trong Word, PowerPoint hoặc Excel. Với PDF/Web/Paint hãy dùng Đũa thần!";
+            error = "Không tìm thấy hình đang chọn trong Word, PowerPoint hoặc Excel. Với PDF/Web/Paint hãy dùng Đũa thần hoặc Chọn HCN/Tự do!";
             return null;
         }
 
@@ -99,22 +101,20 @@ namespace ScienceWordOverlay.Utils
             {
                 dynamic wordApp = wordObj;
                 if ((int)wordApp.Documents.Count == 0) { error = "Word chưa mở tài liệu."; return null; }
-                dynamic win = wordApp.ActiveWindow;
-                dynamic? sr = null;
-                try { sr = wordApp.Selection.ShapeRange; } catch { }
-                if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong Word."; return null; }
+                object winObj = wordApp.ActiveWindow;
+                dynamic win = winObj;
+                object? srObj = null;
+                try { srObj = wordApp.Selection.ShapeRange; } catch { }
+                if (srObj == null) { error = "Hãy chọn ít nhất 1 hình trong Word."; return null; }
 
-                List<dynamic> shapes = CollectShapes((object)sr);
-                if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn Word."; return null; }
+                List<object> shapes = CollectShapes(srObj);
+                if (shapes.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong Word."; return null; }
 
                 double zoomPct = 100.0;
                 try { zoomPct = Convert.ToDouble(win.ActivePane.View.Zoom.Percentage); } catch { }
-                double fallbackPxPerPt = (96.0 * dpiScaleX / 72.0) * (zoomPct / 100.0);
 
-                bool hasGroupBox = TryWordGetPoint(win, sr, out Rect groupPx);
-                var ctx = BuildContextFromShapes(OfficeAppKind.Word, shapes, hasGroupBox, groupPx,
-                    sh => TryWordGetPoint(win, sh, out Rect r) ? r : Rect.Empty,
-                    fallbackPxPerPt, dpiScaleX, dpiScaleY, zoomPct, "Word");
+                Func<object, Rect> getRectPx = (object shObj) => TryWordGetPoint(winObj, shObj, out Rect r) ? r : Rect.Empty;
+                var ctx = BuildPerShapeContext(OfficeAppKind.Word, shapes, getRectPx, dpiScaleX, dpiScaleY, zoomPct, "Word");
 
                 if (ctx != null)
                 {
@@ -172,38 +172,38 @@ namespace ScienceWordOverlay.Utils
             {
                 dynamic pptApp = pptObj;
                 if ((int)pptApp.Presentations.Count == 0) { error = "PowerPoint chưa mở bài trình chiếu."; return null; }
-                dynamic win = pptApp.ActiveWindow;
-                dynamic? sr = null;
-                try { sr = win.Selection.ShapeRange; } catch { }
-                if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong PowerPoint."; return null; }
+                object winObj = pptApp.ActiveWindow;
+                dynamic win = winObj;
+                object? srObj = null;
+                try { srObj = win.Selection.ShapeRange; } catch { }
+                if (srObj == null) { error = "Hãy chọn ít nhất 1 hình trong PowerPoint."; return null; }
 
-                List<dynamic> shapes = CollectShapes((object)sr);
-                if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn PowerPoint."; return null; }
+                List<object> shapes = CollectShapes(srObj);
+                if (shapes.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong PowerPoint."; return null; }
 
                 double zoomPct = 100.0;
                 try { zoomPct = Convert.ToDouble(win.View.Zoom); } catch { }
 
-                // PowerPoint có sẵn PointsToScreenPixelsX / Y rất chính xác!
-                Rect GetPptRectPx(dynamic sh)
+                Func<object, Rect> getRectPx = (object shObj) =>
                 {
                     try
                     {
+                        dynamic sh = shObj;
+                        dynamic w = winObj;
                         float lPt = Convert.ToSingle(sh.Left);
                         float tPt = Convert.ToSingle(sh.Top);
                         float wPt = Convert.ToSingle(sh.Width);
                         float hPt = Convert.ToSingle(sh.Height);
-                        double x1 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt));
-                        double y1 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt));
-                        double x2 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt + wPt));
-                        double y2 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt + hPt));
+                        double x1 = Convert.ToDouble(w.PointsToScreenPixelsX(lPt));
+                        double y1 = Convert.ToDouble(w.PointsToScreenPixelsY(tPt));
+                        double x2 = Convert.ToDouble(w.PointsToScreenPixelsX(lPt + wPt));
+                        double y2 = Convert.ToDouble(w.PointsToScreenPixelsY(tPt + hPt));
                         return new Rect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1));
                     }
                     catch { return Rect.Empty; }
-                }
+                };
 
-                double fallbackPxPerPt = (96.0 * dpiScaleX / 72.0) * (zoomPct / 100.0);
-                return BuildContextFromShapes(OfficeAppKind.PowerPoint, shapes, false, Rect.Empty,
-                    GetPptRectPx, fallbackPxPerPt, dpiScaleX, dpiScaleY, zoomPct, "PowerPoint");
+                return BuildPerShapeContext(OfficeAppKind.PowerPoint, shapes, getRectPx, dpiScaleX, dpiScaleY, zoomPct, "PowerPoint");
             }
             catch (Exception ex) { error = "Lỗi đọc PowerPoint: " + ex.Message; return null; }
         }
@@ -240,37 +240,38 @@ namespace ScienceWordOverlay.Utils
             {
                 dynamic xlApp = xlObj;
                 if ((int)xlApp.Workbooks.Count == 0) { error = "Excel chưa mở bảng tính."; return null; }
-                dynamic win = xlApp.ActiveWindow;
-                dynamic? sr = null;
-                try { sr = xlApp.Selection.ShapeRange; } catch { }
-                if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình (Shape) trong Excel."; return null; }
+                object winObj = xlApp.ActiveWindow;
+                dynamic win = winObj;
+                object? srObj = null;
+                try { srObj = xlApp.Selection.ShapeRange; } catch { }
+                if (srObj == null) { error = "Hãy chọn ít nhất 1 hình (Shape) trong Excel."; return null; }
 
-                List<dynamic> shapes = CollectShapes((object)sr);
-                if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn Excel."; return null; }
+                List<object> shapes = CollectShapes(srObj);
+                if (shapes.Count == 0) { error = "Hãy chọn ít nhất 1 hình (Shape) trong Excel."; return null; }
 
                 double zoomPct = 100.0;
                 try { zoomPct = Convert.ToDouble(win.Zoom); } catch { }
 
-                Rect GetXlRectPx(dynamic sh)
+                Func<object, Rect> getRectPx = (object shObj) =>
                 {
                     try
                     {
+                        dynamic sh = shObj;
+                        dynamic w = winObj;
                         double lPt = Convert.ToDouble(sh.Left);
                         double tPt = Convert.ToDouble(sh.Top);
                         double wPt = Convert.ToDouble(sh.Width);
                         double hPt = Convert.ToDouble(sh.Height);
-                        double x1 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt));
-                        double y1 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt));
-                        double x2 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt + wPt));
-                        double y2 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt + hPt));
+                        double x1 = Convert.ToDouble(w.PointsToScreenPixelsX(lPt));
+                        double y1 = Convert.ToDouble(w.PointsToScreenPixelsY(tPt));
+                        double x2 = Convert.ToDouble(w.PointsToScreenPixelsX(lPt + wPt));
+                        double y2 = Convert.ToDouble(w.PointsToScreenPixelsY(tPt + hPt));
                         return new Rect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1));
                     }
                     catch { return Rect.Empty; }
-                }
+                };
 
-                double fallbackPxPerPt = (96.0 * dpiScaleX / 72.0) * (zoomPct / 100.0);
-                return BuildContextFromShapes(OfficeAppKind.Excel, shapes, false, Rect.Empty,
-                    GetXlRectPx, fallbackPxPerPt, dpiScaleX, dpiScaleY, zoomPct, "Excel");
+                return BuildPerShapeContext(OfficeAppKind.Excel, shapes, getRectPx, dpiScaleX, dpiScaleY, zoomPct, "Excel");
             }
             catch (Exception ex) { error = "Lỗi đọc Excel: " + ex.Message; return null; }
         }
@@ -296,15 +297,16 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi chèn Excel: " + ex.Message; return false; }
         }
 
-        // ===================== HELPERS CHUNG CHO OFFICE =====================
-private static List<dynamic> CollectShapes(object shapeRangeObj)
-{
-    dynamic shapeRange = shapeRangeObj;
-            var list = new List<dynamic>();
+        // ===================== CORE PER-SHAPE PIXEL-PERFECT MAPPER =====================
+        private static List<object> CollectShapes(object shapeRangeObj)
+        {
+            var list = new List<object>();
+            dynamic shapeRange = shapeRangeObj;
             int count = (int)shapeRange.Count;
             for (int i = 1; i <= count; i++)
             {
-                dynamic item = shapeRange.Item(i);
+                object itemObj = shapeRange.Item(i);
+                dynamic item = itemObj;
                 int t = 0;
                 try { t = (int)item.Type; } catch { }
                 if (t == MsoGroup)
@@ -313,107 +315,200 @@ private static List<dynamic> CollectShapes(object shapeRangeObj)
                     {
                         dynamic gItems = item.GroupItems;
                         int gc = (int)gItems.Count;
-                        for (int g = 1; g <= gc; g++) list.Add(gItems.Item(g));
+                        for (int g = 1; g <= gc; g++) list.Add((object)gItems.Item(g));
                         continue;
                     }
                     catch { }
                 }
-                list.Add(item);
+                list.Add(itemObj);
             }
             return list;
         }
 
-        private static OfficeSelectionContext? BuildContextFromShapes(
+        // Ánh xạ TỪNG SHAPE ĐỘC LẬP vào đúng GetPoint(sh) của chính nó -> KHỚP 100% KHÔNG BAO GIỜ LỆCH!
+        private static OfficeSelectionContext? BuildPerShapeContext(
             OfficeAppKind appKind,
-            List<dynamic> shapes,
-            bool hasGroupBox,
-            Rect groupPx,
-            Func<dynamic, Rect> getShapeRectPx,
-            double fallbackPxPerPt,
+            List<object> shapes,
+            Func<object, Rect> getShapeRectPx,
             double dpiScaleX,
             double dpiScaleY,
             double zoomPct,
             string appLabel)
         {
-            double minPtX = double.MaxValue, minPtY = double.MaxValue;
-            double maxPtX = double.MinValue, maxPtY = double.MinValue;
-            var rawContours = new List<(List<Point> pts, bool isLine)>();
-
-            foreach (dynamic sh in shapes)
-            {
-                var ptsPt = ExtractShapePointsInPt(sh, out bool isLine);
-                foreach (var p in ptsPt)
-                {
-                    if (p.X < minPtX) minPtX = p.X;
-                    if (p.Y < minPtY) minPtY = p.Y;
-                    if (p.X > maxPtX) maxPtX = p.X;
-                    if (p.Y > maxPtY) maxPtY = p.Y;
-                }
-                rawContours.Add((ptsPt, isLine));
-            }
-
-            double ptW = Math.Max(1.0, maxPtX - minPtX);
-            double ptH = Math.Max(1.0, maxPtY - minPtY);
-            double pxPerPtX = fallbackPxPerPt, pxPerPtY = fallbackPxPerPt;
-            double basePxX = 0, basePxY = 0;
-
-            if (hasGroupBox && groupPx.Width > 4 && groupPx.Height > 4)
-            {
-                pxPerPtX = groupPx.Width / ptW;
-                pxPerPtY = groupPx.Height / ptH;
-                basePxX = groupPx.Left;
-                basePxY = groupPx.Top;
-            }
-            else
-            {
-                Rect firstPx = getShapeRectPx(shapes[0]);
-                if (firstPx.IsEmpty) return null;
-                double fLeft = Convert.ToDouble(shapes[0].Left);
-                double fTop = Convert.ToDouble(shapes[0].Top);
-                double fW = Math.Max(1.0, Convert.ToDouble(shapes[0].Width));
-                double fH = Math.Max(1.0, Convert.ToDouble(shapes[0].Height));
-                pxPerPtX = firstPx.Width > 4 ? firstPx.Width / fW : fallbackPxPerPt;
-                pxPerPtY = firstPx.Height > 4 ? firstPx.Height / fH : fallbackPxPerPt;
-                basePxX = firstPx.Left + (minPtX - fLeft) * pxPerPtX;
-                basePxY = firstPx.Top + (minPtY - fTop) * pxPerPtY;
-            }
-
             var ctx = new OfficeSelectionContext
             {
                 AppKind = appKind,
-                DipPerPt = 0.5 * (pxPerPtX / dpiScaleX + pxPerPtY / dpiScaleY)
+                DipPerPt = (96.0 / 72.0) * (zoomPct / 100.0)
             };
 
-            double minDipX = double.MaxValue, minDipY = double.MaxValue;
-            double maxDipX = double.MinValue, maxDipY = double.MinValue;
+            double allMinX = double.MaxValue, allMinY = double.MaxValue;
+            double allMaxX = double.MinValue, allMaxY = double.MinValue;
+            bool hasRef = false;
 
-            foreach (var (ptsPt, isLine) in rawContours)
+            foreach (object shObj in shapes)
             {
-                var contour = new OfficeExtractedContour { IsLine = isLine };
-                foreach (var p in ptsPt)
+                Rect shPx = getShapeRectPx(shObj);
+                if (shPx.IsEmpty) continue;
+
+                Rect shDip = new(shPx.Left / dpiScaleX, shPx.Top / dpiScaleY,
+                                 Math.Max(1.0, shPx.Width / dpiScaleX), Math.Max(1.0, shPx.Height / dpiScaleY));
+
+                var rawPt = ExtractShapePointsInPt(shObj, out bool isLine);
+                if (rawPt.Count < 2) continue;
+                if (!isLine && IsNearlyStraight(rawPt, 2.5)) isLine = true;
+
+                double minX = double.MaxValue, minY = double.MaxValue;
+                double maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var p in rawPt)
                 {
-                    double dipX = (basePxX + (p.X - minPtX) * pxPerPtX) / dpiScaleX;
-                    double dipY = (basePxY + (p.Y - minPtY) * pxPerPtY) / dpiScaleY;
-                    contour.ScreenPoints.Add(new Point(dipX, dipY));
-                    if (dipX < minDipX) minDipX = dipX;
-                    if (dipY < minDipY) minDipY = dipY;
-                    if (dipX > maxDipX) maxDipX = dipX;
-                    if (dipY > maxDipY) maxDipY = dipY;
+                    if (p.X < minX) minX = p.X;
+                    if (p.Y < minY) minY = p.Y;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Y > maxY) maxY = p.Y;
                 }
-                if (contour.ScreenPoints.Count >= 2) ctx.Contours.Add(contour);
+                double spanX = maxX - minX;
+                double spanY = maxY - minY;
+
+                var contour = new OfficeExtractedContour { IsLine = isLine };
+                foreach (var p in rawPt)
+                {
+                    double nx = spanX > 1e-3 ? (p.X - minX) / spanX : 0.5;
+                    double ny = spanY > 1e-3 ? (p.Y - minY) / spanY : 0.5;
+                    double dipX = shDip.Left + nx * shDip.Width;
+                    double dipY = shDip.Top + ny * shDip.Height;
+                    contour.ScreenPoints.Add(new Point(dipX, dipY));
+                }
+
+                contour.DiagSpan = Math.Sqrt(shDip.Width * shDip.Width + shDip.Height * shDip.Height);
+                ctx.Contours.Add(contour);
+
+                if (shDip.Left < allMinX) allMinX = shDip.Left;
+                if (shDip.Top < allMinY) allMinY = shDip.Top;
+                if (shDip.Right > allMaxX) allMaxX = shDip.Right;
+                if (shDip.Bottom > allMaxY) allMaxY = shDip.Bottom;
+
+                if (!hasRef)
+                {
+                    hasRef = true;
+                    dynamic sh = shObj;
+                    double wPt = Math.Max(1.0, Convert.ToDouble(sh.Width));
+                    double hPt = Math.Max(1.0, Convert.ToDouble(sh.Height));
+                    if (shDip.Width > 8 && wPt > 8) ctx.DipPerPt = shDip.Width / wPt;
+                    else if (shDip.Height > 8 && hPt > 8) ctx.DipPerPt = shDip.Height / hPt;
+
+                    ctx.RefDipLeft = shDip.Left;
+                    ctx.RefDipTop = shDip.Top;
+                    ctx.RefDocLeftPt = Convert.ToDouble(sh.Left);
+                    ctx.RefDocTopPt = Convert.ToDouble(sh.Top);
+                }
             }
 
-            if (minDipX < maxDipX && minDipY < maxDipY)
-                ctx.ScreenBoundsDip = new Rect(minDipX, minDipY, maxDipX - minDipX, maxDipY - minDipY);
+            if (ctx.Contours.Count == 0) return null;
 
-            dynamic refShape = shapes[0];
-            Rect refPx = getShapeRectPx(refShape);
-            ctx.RefDipLeft = (!refPx.IsEmpty ? refPx.Left : basePxX) / dpiScaleX;
-            ctx.RefDipTop = (!refPx.IsEmpty ? refPx.Top : basePxY) / dpiScaleY;
-            ctx.RefDocLeftPt = Convert.ToDouble(refShape.Left);
-            ctx.RefDocTopPt = Convert.ToDouble(refShape.Top);
-            ctx.Summary = $"Đã đồng bộ {shapes.Count} đối tượng từ {appLabel} (Zoom {zoomPct:0}%)";
+            ctx.ScreenBoundsDip = new Rect(allMinX, allMinY, Math.Max(2, allMaxX - allMinX), Math.Max(2, allMaxY - allMinY));
+            ctx.Revolution = TryBuildRevolutionScene(ctx.Contours, zoomPct);
+            ctx.Summary = ctx.Revolution != null
+                ? $"Đã khớp {ctx.Contours.Count} hình từ {appLabel} (Sẵn sàng Tô S & Quay 3D)"
+                : $"Đã khớp {ctx.Contours.Count} hình từ {appLabel} (Zoom {zoomPct:0}%)";
             return ctx;
+        }
+
+        // Tự động nhận diện 1 Trục + 1 Đường cong (hoặc 2 Đường cong) để Tô Diện Tích & Quay 3D tính Thể Tích
+        private static RevolutionScene? TryBuildRevolutionScene(List<OfficeExtractedContour> contours, double zoomPct)
+        {
+            if (contours.Count < 2) return null;
+
+            int axisIdx = -1;
+            double bestAxisLen = -1;
+            for (int i = 0; i < contours.Count; i++)
+            {
+                if (contours[i].IsLine && contours[i].DiagSpan > bestAxisLen)
+                {
+                    bestAxisLen = contours[i].DiagSpan;
+                    axisIdx = i;
+                }
+            }
+
+            var curveIndices = new List<int>();
+            for (int i = 0; i < contours.Count; i++)
+                if (i != axisIdx && !contours[i].IsLine) curveIndices.Add(i);
+
+            curveIndices.Sort((a, b) => contours[b].DiagSpan.CompareTo(contours[a].DiagSpan));
+
+            // Nếu chỉ có 2 đoạn thẳng -> lấy đoạn dài hơn làm trục, đoạn kia làm đường sinh
+            if (axisIdx != -1 && curveIndices.Count == 0)
+            {
+                for (int i = 0; i < contours.Count; i++)
+                    if (i != axisIdx) { curveIndices.Add(i); break; }
+            }
+
+            var rev = new RevolutionScene { DipPerCm = (96.0 / 2.54) * (zoomPct / 100.0) };
+
+            if (axisIdx != -1 && curveIndices.Count >= 1)
+            {
+                var axisPts = contours[axisIdx].ScreenPoints;
+                var curvePts = contours[curveIndices[0]].ScreenPoints;
+                Point pA = axisPts[0], pB = axisPts[^1];
+                Vector u = pB - pA;
+                if (u.Length < 2.0) return null;
+                u.Normalize();
+                Vector v = new(-u.Y, u.X);
+                if (v.Y > 0.05) v = -v;
+
+                rev.HasTwoCurves = false;
+                rev.AxisOrigin = pA;
+                rev.AxisU = u;
+                rev.AxisV = v;
+                rev.Curve1TR = ProjectToTR(curvePts, pA, u, v, out double tMin, out double tMax);
+                rev.TMin = tMin; rev.TMax = tMax;
+                rev.LimitA = tMin; rev.LimitB = tMax;
+                return rev.IsValid ? rev : null;
+            }
+
+            if (curveIndices.Count >= 2)
+            {
+                var pts1 = contours[curveIndices[0]].ScreenPoints;
+                var pts2 = contours[curveIndices[1]].ScreenPoints;
+                double minX = double.MaxValue, sumY = 0;
+                int cnt = 0;
+                foreach (var p in pts1) { if (p.X < minX) minX = p.X; sumY += p.Y; cnt++; }
+                foreach (var p in pts2) { if (p.X < minX) minX = p.X; sumY += p.Y; cnt++; }
+
+                Point origin = new(minX, cnt > 0 ? sumY / cnt : 0);
+                Vector u = new(1, 0), v = new(0, 1);
+
+                rev.HasTwoCurves = true;
+                rev.AxisOrigin = origin;
+                rev.AxisU = u;
+                rev.AxisV = v;
+                rev.Curve1TR = ProjectToTR(pts1, origin, u, v, out double t1Min, out double t1Max);
+                rev.Curve2TR = ProjectToTR(pts2, origin, u, v, out double t2Min, out double t2Max);
+
+                double oMin = Math.Max(t1Min, t2Min), oMax = Math.Min(t1Max, t2Max);
+                rev.TMin = (oMax - oMin > 5) ? oMin : Math.Min(t1Min, t2Min);
+                rev.TMax = (oMax - oMin > 5) ? oMax : Math.Max(t1Max, t2Max);
+                rev.LimitA = rev.TMin; rev.LimitB = rev.TMax;
+                return rev.IsValid ? rev : null;
+            }
+
+            return null;
+        }
+
+        private static List<Point> ProjectToTR(List<Point> pts, Point origin, Vector u, Vector v, out double tMin, out double tMax)
+        {
+            var tr = new List<Point>(pts.Count);
+            tMin = double.MaxValue; tMax = double.MinValue;
+            foreach (var p in pts)
+            {
+                double dx = p.X - origin.X, dy = p.Y - origin.Y;
+                double t = dx * u.X + dy * u.Y;
+                double r = dx * v.X + dy * v.Y;
+                tr.Add(new Point(t, r));
+                if (t < tMin) tMin = t;
+                if (t > tMax) tMax = t;
+            }
+            if (tMin > tMax) { tMin = 0; tMax = 0; }
+            return tr;
         }
 
         private static bool TryWordGetPoint(object activeWindow, object targetObj, out Rect rect)
@@ -435,8 +530,9 @@ private static List<dynamic> CollectShapes(object shapeRangeObj)
             catch { return false; }
         }
 
-        private static List<Point> ExtractShapePointsInPt(dynamic shape, out bool isLine)
+        private static List<Point> ExtractShapePointsInPt(object shapeObj, out bool isLine)
         {
+            dynamic shape = shapeObj;
             var result = new List<Point>();
             int shapeType = 0;
             try { shapeType = (int)shape.Type; } catch { }
@@ -486,15 +582,16 @@ private static List<dynamic> CollectShapes(object shapeRangeObj)
                             Point c1 = GetNodePoint(node);
                             Point c2 = GetNodePoint(nodes.Item(i + 1));
                             Point p3 = GetNodePoint(nodes.Item(i + 2));
-                            for (int s = 1; s <= 18; s++)
-                                result.Add(EvalCubicBezier(curr, c1, c2, p3, s / 18.0));
+                            for (int s = 1; s <= 24; s++)
+                                result.Add(EvalCubicBezier(curr, c1, c2, p3, s / 24.0));
                             curr = p3;
                             i += 3;
                         }
                         else
                         {
                             Point next = GetNodePoint(node);
-                            result.Add(next);
+                            for (int s = 1; s <= 6; s++)
+                                result.Add(new Point(curr.X + (next.X - curr.X) * s / 6.0, curr.Y + (next.Y - curr.Y) * s / 6.0));
                             curr = next;
                             i += 1;
                         }
@@ -514,6 +611,18 @@ private static List<dynamic> CollectShapes(object shapeRangeObj)
             result.Add(new Point(left + width, top + height));
             result.Add(new Point(left, top + height));
             return result;
+        }
+
+        private static bool IsNearlyStraight(List<Point> pts, double tol)
+        {
+            if (pts.Count <= 2) return true;
+            Point a = pts[0], b = pts[^1];
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1.0) return false;
+            for (int i = 1; i < pts.Count - 1; i++)
+                if (Math.Abs((pts[i].X - a.X) * dy - (pts[i].Y - a.Y) * dx) / len > tol) return false;
+            return true;
         }
 
         private static Point GetNodePoint(dynamic node)

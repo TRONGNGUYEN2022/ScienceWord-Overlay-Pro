@@ -8,8 +8,8 @@
         Topmost="True"
         SizeToContent="WidthAndHeight"
         ResizeMode="NoResize"
-        Left="60"
-        Top="12">
+        Left="35"
+        Top="10">
 
     <Window.Resources>
         <Style x:Key="ToolBtn" TargetType="RadioButton">
@@ -17,9 +17,9 @@
             <Setter Property="Foreground" Value="#F8FAFC"/>
             <Setter Property="BorderBrush" Value="#5A94A3B8"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Padding" Value="5.5,3.5"/>
             <Setter Property="Margin" Value="1.5,0"/>
-            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontSize" Value="10.8"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -50,9 +50,9 @@
             <Setter Property="Foreground" Value="#F8FAFC"/>
             <Setter Property="BorderBrush" Value="#5A94A3B8"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Padding" Value="6,3.5"/>
             <Setter Property="Margin" Value="1.5,0"/>
-            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontSize" Value="10.8"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -72,38 +72,40 @@
         </Style>
     </Window.Resources>
 
-    <Border Background="#EC0F172A" BorderBrush="#B460A5FA" BorderThickness="1.5" CornerRadius="12" Padding="10,7" Margin="6">
+    <Border Background="#EE0F172A" BorderBrush="#B460A5FA" BorderThickness="1.5" CornerRadius="12" Padding="9,6" Margin="6">
         <Border.Effect>
             <DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.45" Color="Black"/>
         </Border.Effect>
 
         <StackPanel>
-            <!-- HANG 1: CONG CU VE + DUA THAN -->
+            <!-- HANG 1: CONG CU VE + SNIPPING TOOL + DUA THAN -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="⋮⋮ W² Universal" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
-                           VerticalAlignment="Center" Margin="0,0,6,0" Cursor="SizeAll"
+                <TextBlock Text="⋮⋮ W² v4" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
+                           VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll"
                            MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
 
-                <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="6,2" Margin="0,0,6,0">
+                <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="5" Padding="5,2" Margin="0,0,5,0">
                     <TextBlock x:Name="TxtTargetApp" Text="Đích: Tự động" Foreground="#7DD3FC" FontSize="10.5" FontWeight="Bold" VerticalAlignment="Center"/>
                 </Border>
 
-                <ToggleButton x:Name="BtnPassthrough" Content="Xuyên chuột" Padding="7,4" Margin="1,0,5,0"
-                              FontSize="11" FontWeight="Bold" Cursor="Hand"
+                <ToggleButton x:Name="BtnPassthrough" Content="Xuyên chuột" Padding="6,3.5" Margin="1,0,4,0"
+                              FontSize="10.8" FontWeight="Bold" Cursor="Hand"
                               Checked="BtnPassthrough_Checked" Unchecked="BtnPassthrough_Unchecked"
                               Background="#334155" Foreground="White" BorderBrush="#94A3B8"/>
 
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Chọn" Tag="select" Click="Tool_Click"/>
+                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Chọn HCN" Tag="snip_rect" ToolTip="Chọn vùng chữ nhật kiểu Snipping Tool để chụp hoặc tô" Click="Tool_Click"/>
+                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Chọn tự do" Tag="snip_lasso" ToolTip="Khoanh vùng tự do kiểu Snipping Tool để chụp hoặc tô" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Đũa thần" Tag="magic_wand" ToolTip="Click 1 phát tô màu mọi hình kín trên PDF, Web, Paint, Word" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Điểm" Tag="point" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Đoạn" Tag="segment" IsChecked="True" Click="Tool_Click"/>
-                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Nét đứt" Tag="dashed" Click="Tool_Click"/>
+                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Đứt 3D" Tag="dashed" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Vectơ" Tag="vector" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Tam giác" Tag="triangle" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="HCN" Tag="rect" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Tròn" Tag="circle" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="T.Điểm" Tag="midpoint" Click="Tool_Click"/>
-                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Đ.Cao ⊥" Tag="altitude" Click="Tool_Click"/>
+                <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="⊥ Cao" Tag="altitude" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Tô miền" Tag="fill_area" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Tô góc" Tag="fill_angle" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="G.Vuông" Tag="right_angle" Click="Tool_Click"/>
@@ -111,58 +113,77 @@
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Dạ quang" Tag="highlighter" Click="Tool_Click"/>
                 <RadioButton Style="{StaticResource ToolBtn}" GroupName="Tools" Content="Chữ" Tag="text" Click="Tool_Click"/>
 
-                <Button x:Name="BtnCollapse" Style="{StaticResource ActionBtn}" Content="▲" Width="26" Margin="5,0,2,0" Click="BtnCollapse_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="✕" Width="26" Background="#DC2626" BorderBrush="#F87171" Click="BtnClose_Click"/>
+                <Button x:Name="BtnCollapse" Style="{StaticResource ActionBtn}" Content="▲" Width="25" Margin="4,0,2,0" Click="BtnCollapse_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="✕" Width="25" Background="#DC2626" BorderBrush="#F87171" Click="BtnClose_Click"/>
             </StackPanel>
 
-            <!-- HANG 2: MAU NET, MAU TO, TUONG TAC OFFICE & CHEN VAO APP -->
-            <StackPanel x:Name="Row2Panel" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,6,0,0">
-                <TextBlock Text="Nét:" Foreground="#CBD5E1" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#0F172A" BorderBrush="White" Tag="#0F172A" Click="StrokeColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#1D4ED8" BorderBrush="White" Tag="#1D4ED8" Click="StrokeColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#DC2626" BorderBrush="White" Tag="#DC2626" Click="StrokeColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#059669" BorderBrush="White" Tag="#059669" Click="StrokeColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0,5,0" Background="#FFFFFF" BorderBrush="#94A3B8" Tag="#FFFFFF" Click="StrokeColor_Click"/>
+            <!-- HANG 2: MAU NET, MAU TO, SNIP ACTIONS, OFFICE COM & XUAT -->
+            <StackPanel x:Name="Row2Panel" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,5,0,0">
+                <TextBlock Text="Nét:" Foreground="#CBD5E1" FontSize="10.8" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#0F172A" BorderBrush="White" Tag="#0F172A" Click="StrokeColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#1D4ED8" BorderBrush="White" Tag="#1D4ED8" Click="StrokeColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#DC2626" BorderBrush="White" Tag="#DC2626" Click="StrokeColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#059669" BorderBrush="White" Tag="#059669" Click="StrokeColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0,5,0" Background="#FFFFFF" BorderBrush="#94A3B8" Tag="#FFFFFF" Click="StrokeColor_Click"/>
 
-                <ComboBox x:Name="CbWidth" Width="54" Margin="0,0,6,0" SelectedIndex="1" SelectionChanged="CbWidth_SelectionChanged" FontSize="11">
+                <ComboBox x:Name="CbWidth" Width="50" Margin="0,0,5,0" SelectedIndex="1" SelectionChanged="CbWidth_SelectionChanged" FontSize="10.8">
                     <ComboBoxItem Content="1.5" Tag="1.5"/>
                     <ComboBoxItem Content="2.4" Tag="2.4"/>
                     <ComboBoxItem Content="4.0" Tag="4.0"/>
                     <ComboBoxItem Content="6.0" Tag="6.0"/>
                 </ComboBox>
 
-                <TextBlock Text="Tô:" Foreground="#CBD5E1" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#3B82F6" BorderBrush="White" Tag="#3B82F6" Click="FillColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#F59E0B" BorderBrush="White" Tag="#F59E0B" Click="FillColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#10B981" BorderBrush="White" Tag="#10B981" Click="FillColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0" Background="#EF4444" BorderBrush="White" Tag="#EF4444" Click="FillColor_Click"/>
-                <Button Width="17" Height="17" Margin="1,0,5,0" Background="#FDE047" BorderBrush="White" Tag="#FDE047" Click="FillColor_Click"/>
+                <TextBlock Text="Tô:" Foreground="#CBD5E1" FontSize="10.8" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#3B82F6" BorderBrush="White" Tag="#3B82F6" Click="FillColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#F59E0B" BorderBrush="White" Tag="#F59E0B" Click="FillColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#10B981" BorderBrush="White" Tag="#10B981" Click="FillColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0" Background="#EF4444" BorderBrush="White" Tag="#EF4444" Click="FillColor_Click"/>
+                <Button Width="16" Height="16" Margin="1,0,5,0" Background="#FDE047" BorderBrush="White" Tag="#FDE047" Click="FillColor_Click"/>
 
-                <ComboBox x:Name="CbPattern" Width="82" Margin="0,0,5,0" SelectedIndex="0" SelectionChanged="CbPattern_SelectionChanged" FontSize="11">
+                <ComboBox x:Name="CbPattern" Width="78" Margin="0,0,4,0" SelectedIndex="0" SelectionChanged="CbPattern_SelectionChanged" FontSize="10.8">
                     <ComboBoxItem Content="Tô đặc" Tag="solid"/>
                     <ComboBoxItem Content="Gạch chéo" Tag="hatch"/>
                     <ComboBoxItem Content="Ca rô" Tag="cross"/>
                     <ComboBoxItem Content="Chấm bi" Tag="dots"/>
                 </ComboBox>
 
-                <TextBlock Text="Mờ:" Foreground="#CBD5E1" FontSize="11" VerticalAlignment="Center" Margin="0,0,2,0"/>
-                <Slider x:Name="SlOpacity" Width="48" Minimum="10" Maximum="85" Value="35" VerticalAlignment="Center" Margin="0,0,5,0" ValueChanged="SlOpacity_ValueChanged"/>
+                <TextBlock Text="Mờ:" Foreground="#CBD5E1" FontSize="10.8" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                <Slider x:Name="SlOpacity" Width="46" Minimum="10" Maximum="85" Value="40" VerticalAlignment="Center" Margin="0,0,5,0" ValueChanged="SlOpacity_ValueChanged"/>
 
-                <Button Style="{StaticResource ActionBtn}" Content="Chóp 3D" Click="PresetPyramid_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="Lập phương" Click="PresetCube_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Chụp vùng" Background="#7C3AED" BorderBrush="#C4B5FD" ToolTip="Chụp vùng vừa chọn bằng Chọn HCN / Chọn tự do vào Clipboard" Click="BtnSnipCapture_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Tô vùng" Background="#9333EA" BorderBrush="#D8B4FE" ToolTip="Tô màu vùng vừa chọn bằng Chọn HCN / Chọn tự do" Click="BtnSnipFill_Click"/>
 
-                <CheckBox Content="Thước" IsChecked="True" Foreground="#E2E8F0" FontSize="11" VerticalAlignment="Center" Margin="4,0,3,0" Checked="ChkTools_Changed" Unchecked="ChkTools_Changed"/>
-                <CheckBox Content="Tên" IsChecked="True" Foreground="#E2E8F0" FontSize="11" VerticalAlignment="Center" Margin="2,0,4,0" Checked="ChkLabels_Changed" Unchecked="ChkLabels_Changed"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Chóp" Click="PresetPyramid_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Lập P." Click="PresetCube_Click"/>
 
-                <Button Style="{StaticResource ActionBtn}" Content="↩" ToolTip="Hoàn tác (Ctrl+Z)" Click="BtnUndo_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="↪" ToolTip="Làm lại (Ctrl+Y)" Click="BtnRedo_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="↩" Click="BtnUndo_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="↪" Click="BtnRedo_Click"/>
                 <Button Style="{StaticResource ActionBtn}" Content="Xóa" Click="BtnClear_Click"/>
 
-                <Button Style="{StaticResource ActionBtn}" Content="Đọc Office" Background="#0D9488" BorderBrush="#5EEAD4" ToolTip="Đọc hình đang chọn trong Word, PowerPoint hoặc Excel" Click="BtnSyncOffice_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="Tô hình Office" Background="#D97706" BorderBrush="#FDE68A" ToolTip="Tô màu ngay vào hình đang chọn trong Word/PPT/Excel" Click="BtnFillOffice_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="Chèn vào App" Background="#2563EB" BorderBrush="#93C5FD" FontWeight="Bold" ToolTip="Chèn khớp tọa độ vào Word/PPT/Excel hoặc tự dán Ctrl+V vào Paint/Web/PDF" Click="BtnInsertApp_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="Copy PNG" Background="#10B981" Foreground="#052E16" BorderBrush="#6EE7B7" FontWeight="Bold" Click="BtnCopyPng_Click"/>
-                <Button Style="{StaticResource ActionBtn}" Content="Lưu PNG" Background="#0284C7" BorderBrush="#7DD3FC" Click="BtnSavePng_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Đọc Office" Background="#0D9488" BorderBrush="#5EEAD4" Click="BtnSyncOffice_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Tô Office" Background="#D97706" BorderBrush="#FDE68A" Click="BtnFillOffice_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Chèn App" Background="#2563EB" BorderBrush="#93C5FD" FontWeight="Bold" Click="BtnInsertApp_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Copy" Background="#10B981" Foreground="#052E16" BorderBrush="#6EE7B7" FontWeight="Bold" Click="BtnCopyPng_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="PNG" Background="#0284C7" BorderBrush="#7DD3FC" Click="BtnSavePng_Click"/>
+            </StackPanel>
+
+            <!-- HANG 3: KHOI TRON XOAY 3D, KEO CAN [a, b] & TINH THE TICH V -->
+            <StackPanel x:Name="Row3Panel" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,5,0,0">
+                <TextBlock Text="Tích phân &amp; 3D:" Foreground="#FBBF24" FontSize="10.8" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <Button x:Name="BtnRevArea" Style="{StaticResource ActionBtn}" Content="Tô S (2D)" Background="#2563EB" Click="BtnRevArea_Click"/>
+                <Button x:Name="BtnRev3D" Style="{StaticResource ActionBtn}" Content="Quay 3D (V)" Click="BtnRev3D_Click"/>
+                <Button x:Name="BtnRevAnim" Style="{StaticResource ActionBtn}" Content="▶ Xoay 0°-360°" Background="#B45309" Click="BtnRevAnim_Click"/>
+
+                <TextBlock x:Name="TxtRevAngle" Text="Góc: 360°" Foreground="#E2E8F0" FontSize="10.8" VerticalAlignment="Center" Margin="6,0,3,0"/>
+                <Slider x:Name="SlRevAngle" Width="76" Minimum="0" Maximum="360" Value="360" VerticalAlignment="Center" Margin="0,0,6,0" ValueChanged="SlRevAngle_ValueChanged"/>
+
+                <CheckBox Content="Nắp 3D" IsChecked="True" Foreground="#E2E8F0" FontSize="10.8" VerticalAlignment="Center" Margin="0,0,6,0" Checked="ChkRevCaps_Changed" Unchecked="ChkRevCaps_Changed"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Đổi trục" Click="BtnRevSwap_Click"/>
+                <Button Style="{StaticResource ActionBtn}" Content="Tắt 3D" Click="BtnRevClear_Click"/>
+
+                <Border Background="#1E293B" BorderBrush="#34D399" BorderThickness="1" CornerRadius="5" Padding="7,2" Margin="8,0,0,0">
+                    <TextBlock x:Name="TxtMetrics" Text="Chọn 1 Trục + 1 Đường cong trong Word rồi bấm [Đọc Office] để Quay 3D &amp; tính V" Foreground="#6EE7B7" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                </Border>
             </StackPanel>
         </StackPanel>
     </Border>

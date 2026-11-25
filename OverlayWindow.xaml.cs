@@ -19,7 +19,7 @@ namespace ScienceWordOverlay
             Surface.InvalidateVisual();
             Surface.ShowToast(enabled
                 ? "Chế độ XUYÊN CHUỘT: Thao tác trực tiếp trên App bên dưới"
-                : "Chế độ VẼ TRONG SUỐT: Sẵn sàng vẽ, tô màu & dùng Đũa thần");
+                : "Chế độ VẼ TRONG SUỐT: Sẵn sàng vẽ, tô màu, Snip & Quay 3D");
         }
     }
 }
