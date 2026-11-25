@@ -104,7 +104,7 @@ namespace ScienceWordOverlay.Utils
                 try { sr = wordApp.Selection.ShapeRange; } catch { }
                 if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong Word."; return null; }
 
-                var shapes = CollectShapes(sr);
+                List<dynamic> shapes = CollectShapes((object)sr);
                 if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn Word."; return null; }
 
                 double zoomPct = 100.0;
@@ -177,7 +177,7 @@ namespace ScienceWordOverlay.Utils
                 try { sr = win.Selection.ShapeRange; } catch { }
                 if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình trong PowerPoint."; return null; }
 
-                var shapes = CollectShapes(sr);
+                List<dynamic> shapes = CollectShapes((object)sr);
                 if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn PowerPoint."; return null; }
 
                 double zoomPct = 100.0;
@@ -245,7 +245,7 @@ namespace ScienceWordOverlay.Utils
                 try { sr = xlApp.Selection.ShapeRange; } catch { }
                 if (sr == null || (int)sr.Count == 0) { error = "Hãy chọn ít nhất 1 hình (Shape) trong Excel."; return null; }
 
-                var shapes = CollectShapes(sr);
+                List<dynamic> shapes = CollectShapes((object)sr);
                 if (shapes.Count == 0) { error = "Không có hình hợp lệ trong vùng chọn Excel."; return null; }
 
                 double zoomPct = 100.0;
@@ -297,8 +297,9 @@ namespace ScienceWordOverlay.Utils
         }
 
         // ===================== HELPERS CHUNG CHO OFFICE =====================
-        private static List<dynamic> CollectShapes(dynamic shapeRange)
-        {
+private static List<dynamic> CollectShapes(object shapeRangeObj)
+{
+    dynamic shapeRange = shapeRangeObj;
             var list = new List<dynamic>();
             int count = (int)shapeRange.Count;
             for (int i = 1; i <= count; i++)
