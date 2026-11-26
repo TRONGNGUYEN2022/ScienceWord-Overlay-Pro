@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -46,6 +47,9 @@ namespace ScienceWordOverlay.Utils
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         [DllImport("user32.dll")]
         private static extern uint GetDoubleClickTime();
 
@@ -54,7 +58,7 @@ namespace ScienceWordOverlay.Utils
         private int _lastClickTick = 0;
         private POINT _lastClickPt;
 
-        public event Action<string>? OfficeDoubleClicked;
+        public event Action<string, IntPtr, int, int>? TargetAppDoubleClicked;
 
         public void Install()
         {
@@ -70,8 +74,8 @@ namespace ScienceWordOverlay.Utils
                 if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
                 {
                     var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-                    string? officeProc = GetOfficeProcAtPoint(info.pt);
-                    if (officeProc != null)
+                    var (procName, rootHwnd) = GetSupportedAppAtPoint(info.pt);
+                    if (procName != null)
                     {
                         int now = Environment.TickCount;
                         int dt = unchecked(now - _lastClickTick);
@@ -81,7 +85,7 @@ namespace ScienceWordOverlay.Utils
                             Math.Abs(info.pt.y - _lastClickPt.y) <= 10)
                         {
                             _lastClickTick = 0;
-                            OfficeDoubleClicked?.Invoke(officeProc);
+                            TargetAppDoubleClicked?.Invoke(procName, rootHwnd, info.pt.x, info.pt.y);
                         }
                         else
                         {
@@ -99,10 +103,10 @@ namespace ScienceWordOverlay.Utils
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
-        private static string? GetOfficeProcAtPoint(POINT pt)
+        private static (string? proc, IntPtr rootHwnd) GetSupportedAppAtPoint(POINT pt)
         {
             IntPtr hWnd = WindowFromPoint(pt);
-            if (hWnd == IntPtr.Zero) return null;
+            if (hWnd == IntPtr.Zero) return (null, IntPtr.Zero);
             IntPtr root = GetAncestor(hWnd, GA_ROOT);
             if (root == IntPtr.Zero) root = hWnd;
 
@@ -110,11 +114,22 @@ namespace ScienceWordOverlay.Utils
             if (GetClassName(root, sb, sb.Capacity) > 0)
             {
                 string cls = sb.ToString();
-                if (cls.Equals("OpusApp", StringComparison.OrdinalIgnoreCase)) return "WINWORD";
-                if (cls.Equals("PPTFrameClass", StringComparison.OrdinalIgnoreCase)) return "POWERPNT";
-                if (cls.Equals("XLMAIN", StringComparison.OrdinalIgnoreCase)) return "EXCEL";
+                if (cls.Equals("OpusApp", StringComparison.OrdinalIgnoreCase)) return ("WINWORD", root);
+                if (cls.Equals("PPTFrameClass", StringComparison.OrdinalIgnoreCase)) return ("POWERPNT", root);
+                if (cls.Equals("XLMAIN", StringComparison.OrdinalIgnoreCase)) return ("EXCEL", root);
             }
-            return null;
+
+            try
+            {
+                GetWindowThreadProcessId(root, out uint pid);
+                using var p = Process.GetProcessById((int)pid);
+                string up = p.ProcessName.ToUpperInvariant();
+                if (up.Contains("SCIENCEWORD") || up == "SW")
+                    return (p.ProcessName, root);
+            }
+            catch { }
+
+            return (null, IntPtr.Zero);
         }
 
         public void Dispose()

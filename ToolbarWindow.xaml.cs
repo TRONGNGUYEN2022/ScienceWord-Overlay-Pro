@@ -21,6 +21,9 @@ namespace ScienceWordOverlay
         private readonly OfficeDoubleClickHook _dblClickHook = new();
         private readonly DispatcherTimer _dblClickDelayTimer;
         private string _pendingDblClickProc = "";
+        private IntPtr _pendingDblClickHwnd = IntPtr.Zero;
+        private int _pendingDblClickX = 0;
+        private int _pendingDblClickY = 0;
 
         public ToolbarWindow(OverlayWindow overlay)
         {
@@ -37,22 +40,42 @@ namespace ScienceWordOverlay
             _revAnimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
             _revAnimTimer.Tick += OnRevAnimTick;
 
-            _dblClickDelayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(130) };
+            Loaded += (_, _) => ClampToScreenBounds();
+            SizeChanged += (_, _) => ClampToScreenBounds();
+
+            _dblClickDelayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
             _dblClickDelayTimer.Tick += (_, _) =>
             {
                 _dblClickDelayTimer.Stop();
-                if (_overlay.Surface.TryRestoreFromOfficeDoubleClick(_pendingDblClickProc))
-                {
-                    if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
-                }
+                bool ok = false;
+                string up = _pendingDblClickProc.ToUpperInvariant();
+                if (up is "WINWORD" or "POWERPNT" or "EXCEL")
+                    ok = _overlay.Surface.TryRestoreFromOfficeDoubleClick(_pendingDblClickProc);
+                else if (up.Contains("SCIENCEWORD") || up == "SW")
+                    ok = _overlay.Surface.TryRestoreFromScienceWordDoubleClick(_pendingDblClickHwnd, _pendingDblClickX, _pendingDblClickY);
+
+                if (ok && BtnPassthrough.IsChecked == true)
+                    BtnPassthrough.IsChecked = false;
             };
-            _dblClickHook.OfficeDoubleClicked += proc =>
+            _dblClickHook.TargetAppDoubleClicked += (proc, hwnd, px, py) =>
             {
                 if (BtnPassthrough.IsChecked != true) return;
                 _pendingDblClickProc = proc;
+                _pendingDblClickHwnd = hwnd;
+                _pendingDblClickX = px;
+                _pendingDblClickY = py;
                 Dispatcher.BeginInvoke(() => { _dblClickDelayTimer.Stop(); _dblClickDelayTimer.Start(); });
             };
             _dblClickHook.Install();
+        }
+
+        private void ClampToScreenBounds()
+        {
+            var wa = SystemParameters.WorkArea;
+            if (ActualWidth <= 0) return;
+            if (Left + ActualWidth > wa.Right) Left = Math.Max(wa.Left + 2, wa.Right - ActualWidth - 4);
+            if (Left < wa.Left) Left = wa.Left + 2;
+            if (Top < wa.Top) Top = wa.Top + 2;
         }
 
         private void OnPollForegroundApp(object? sender, EventArgs e)
@@ -163,6 +186,32 @@ namespace ScienceWordOverlay
         private void BtnClear_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ClearAll();
         private void BtnSyncOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SyncFromOffice();
         private void BtnFillOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.FillSelectedOfficeShape();
+        private void BtnHistoryEdit_Click(object sender, RoutedEventArgs e)
+        {
+            var menu = new ContextMenu();
+            var recent = SceneHistoryStore.GetRecent(10);
+            if (recent.Count == 0)
+            {
+                menu.Items.Add(new MenuItem { Header = "(Chưa có hình nào được chèn gần đây)", IsEnabled = false });
+            }
+            else
+            {
+                foreach (var entry in recent)
+                {
+                    var item = new MenuItem { Header = $"{entry.Label} ({entry.TargetApp})" };
+                    var captured = entry;
+                    item.Click += (_, _) =>
+                    {
+                        if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
+                        _overlay.Surface.RestoreFromHistoryEntry(captured);
+                    };
+                    menu.Items.Add(item);
+                }
+            }
+            menu.PlacementTarget = BtnHistoryEdit;
+            menu.IsOpen = true;
+        }
+
         private void ChkWhiteBg_Changed(object sender, RoutedEventArgs e) { if (_overlay != null) _overlay.Surface.ExportWhiteBg = (sender as CheckBox)?.IsChecked == true; }
         private void BtnInsertApp_Click(object sender, RoutedEventArgs e) => _overlay.Surface.InsertIntoTargetApp();
         private void BtnCopyPng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CopyToClipboard();

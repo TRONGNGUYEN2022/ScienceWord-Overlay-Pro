@@ -216,6 +216,58 @@ namespace ScienceWordOverlay
             return true;
         }
 
+        public bool TryRestoreFromScienceWordDoubleClick(IntPtr swHwnd, int clickPxX, int clickPxY)
+        {
+            // Gửi Ctrl+C để lấy ảnh vừa được nháy đúp chọn trong ScienceWord rồi đọc mã nhận diện ẩn (LSB Stego)
+            try
+            {
+                Clipboard.Clear();
+                Win32Helper.SendCopyToWindow(swHwnd);
+                System.Threading.Thread.Sleep(150);
+
+                if (Clipboard.ContainsImage())
+                {
+                    var img = Clipboard.GetImage();
+                    if (img != null && SceneHistoryStore.TryDecodeStegoId(img, out int sceneId))
+                    {
+                        var entry = SceneHistoryStore.GetById(sceneId);
+                        if (entry != null)
+                        {
+                            var dpi = VisualTreeHelper.GetDpi(this);
+                            double clickDipX = clickPxX / dpi.DpiScaleX;
+                            double clickDipY = clickPxY / dpi.DpiScaleY;
+                            double imgDipW = img.PixelWidth / dpi.DpiScaleX;
+                            double imgDipH = img.PixelHeight / dpi.DpiScaleY;
+                            double sx = entry.BoxW > 4 ? imgDipW / entry.BoxW : 1.0;
+                            double sy = entry.BoxH > 4 ? imgDipH / entry.BoxH : 1.0;
+
+                            var topLeft = new Point(Math.Max(20, clickDipX - imgDipW * 0.5), Math.Max(90, clickDipY - imgDipH * 0.5));
+                            SaveHistory();
+                            Scene = SceneHistoryStore.MaterializeSceneAt(entry, topLeft, sx, sy);
+                            OfficeContext = null;
+                            ClearGroupSelection();
+                            InvalidateVisual();
+                            ShowToast($"Đã mở lại hình #{entry.Id} từ ScienceWord! Sửa xong bấm [Chèn App] để thay thế hình đang chọn.", 4800);
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public void RestoreFromHistoryEntry(SavedSceneEntry entry)
+        {
+            SaveHistory();
+            var targetPos = new Point(Math.Max(40, entry.OrigLeft), Math.Max(110, entry.OrigTop));
+            Scene = SceneHistoryStore.MaterializeSceneAt(entry, targetPos, 1.0, 1.0);
+            OfficeContext = null;
+            ClearGroupSelection();
+            InvalidateVisual();
+            ShowToast($"Đã mở lại {entry.Label}! Chỉnh sửa xong bấm [Chèn App] để dán lại.", 4200);
+        }
+
         private void ClearGroupSelection()
         {
             _selPointIds.Clear(); _selStrokeIds.Clear(); _selTextIds.Clear(); _selMagicIds.Clear();
@@ -517,22 +569,26 @@ namespace ScienceWordOverlay
 
                 if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, Scene, dpi.DpiScaleX, dpi.DpiScaleY, out _))
                 {
+                    SceneHistoryStore.SaveScene(Scene, bbox.Value, Win32Helper.FriendlyAppName(LastTargetProcName));
                     ShowToast($"Đã chèn khớp tọa độ vào {Win32Helper.FriendlyAppName(LastTargetProcName)}!");
                     return;
                 }
             }
 
-            // Dán qua Clipboard (ScienceWord, Paint, Web, Zalo...): xuất đúng tỉ lệ 1:1 pixel vật lý màn hình (dpi.DpiScaleX)
-            // và tự lót nền trắng cho ScienceWord / Paint để không bị ô vuông đen
-            bool useWhite = TargetNeedsOpaqueWhiteBg(procUpper);
-            var clipBmp = RenderExportBitmap(dpi.DpiScaleX, forceWhiteBg: useWhite);
-            if (clipBmp == null) return;
+            // Lưu vào lịch sử để hỗ trợ Double-Click / Mở hình cũ sửa lại trên ScienceWord & các app khác
+            var savedEntry = SceneHistoryStore.SaveScene(Scene, bbox.Value, Win32Helper.FriendlyAppName(LastTargetProcName));
 
-            CopyBitmapSourceToClipboard(clipBmp, opaqueWhite: useWhite);
+            // Dán qua Clipboard (ScienceWord, Paint, Web, Zalo...): xuất đúng tỉ lệ 1:1 pixel vật lý màn hình (dpi.DpiScaleX)
+            bool useWhite = TargetNeedsOpaqueWhiteBg(procUpper);
+            var rawBmp = RenderExportBitmap(dpi.DpiScaleX, forceWhiteBg: useWhite);
+            if (rawBmp == null) return;
+
+            BitmapSource finalBmp = useWhite ? SceneHistoryStore.EmbedStegoId(rawBmp, savedEntry.Id) : rawBmp;
+            CopyBitmapSourceToClipboard(finalBmp, opaqueWhite: useWhite);
             if (Win32Helper.SendPasteToWindow(LastTargetHwnd))
-                ShowToast($"Đã dán đúng tỉ lệ 1:1 vào {Win32Helper.FriendlyAppName(LastTargetProcName)}{(useWhite ? " (nền trắng)" : "")}!");
+                ShowToast($"Đã dán 1:1 vào {Win32Helper.FriendlyAppName(LastTargetProcName)} (Lưu #{savedEntry.Id} — Double-Click hoặc bấm [Sửa cũ] để chỉnh lại)!", 4200);
             else
-                ShowToast("Đã Copy ảnh vào Clipboard — hãy bấm Ctrl+V vào ứng dụng đích!");
+                ShowToast($"Đã Copy ảnh (#{savedEntry.Id}) vào Clipboard — nhấn Ctrl+V để dán!");
         }
 
         // ================= HÀM HÌNH HỌC =================
@@ -1794,16 +1850,41 @@ namespace ScienceWordOverlay
                 }
             }
             foreach (var mf in MagicFills) { xs.Add(mf.BoundsDip.Left); xs.Add(mf.BoundsDip.Right); ys.Add(mf.BoundsDip.Top); ys.Add(mf.BoundsDip.Bottom); }
-            foreach (var p in Scene.Points) { xs.Add(p.X); ys.Add(p.Y); }
+            foreach (var p in Scene.Points)
+            {
+                xs.Add(p.X); ys.Add(p.Y);
+                if (ShowLabels && !string.IsNullOrEmpty(p.Label))
+                {
+                    // Cộng đủ bề rộng và chiều cao thực tế của chữ nhãn (Times New Roman 20px nghiêng) để không bao giờ bị cắt chữ ở mép phải/trên!
+                    double lblW = Math.Max(22.0, p.Label.Length * 15.0 + 8.0);
+                    double lblH = 26.0;
+                    xs.Add(p.X + p.Lx);
+                    xs.Add(p.X + p.Lx + lblW);
+                    ys.Add(p.Y + p.Ly - 2.0);
+                    ys.Add(p.Y + p.Ly + lblH);
+                }
+            }
             foreach (var sh in Scene.Shapes.Where(s => s.Type == "circle"))
             {
                 var p1 = GetPoint(sh.P1Id); var p2 = GetPoint(sh.P2Id);
                 if (p1 != null && p2 != null) { double r = Dist(new Point(p1.X, p1.Y), new Point(p2.X, p2.Y)); xs.Add(p1.X - r); xs.Add(p1.X + r); ys.Add(p1.Y - r); ys.Add(p1.Y + r); }
             }
-            foreach (var st in Scene.Strokes) foreach (var pt in st.Points) { xs.Add(pt[0]); ys.Add(pt[1]); }
-            foreach (var t in Scene.Texts) { xs.Add(t.X); xs.Add(t.X + t.Text.Length * 14); ys.Add(t.Y - 24); ys.Add(t.Y + 14); }
+            foreach (var st in Scene.Strokes)
+            {
+                double halfW = Math.Max(4.0, st.Width * 0.6);
+                foreach (var pt in st.Points)
+                {
+                    xs.Add(pt[0] - halfW); xs.Add(pt[0] + halfW);
+                    ys.Add(pt[1] - halfW); ys.Add(pt[1] + halfW);
+                }
+            }
+            foreach (var t in Scene.Texts)
+            {
+                xs.Add(t.X - 4); xs.Add(t.X + Math.Max(24, t.Text.Length * (t.FontSize * 0.68)) + 8);
+                ys.Add(t.Y - t.FontSize * 0.8); ys.Add(t.Y + t.FontSize * 0.8);
+            }
             if (xs.Count == 0) return null;
-            double pad = 16;
+            double pad = 22;
             return new Rect(xs.Min() - pad, ys.Min() - pad, (xs.Max() - xs.Min()) + 2 * pad, (ys.Max() - ys.Min()) + 2 * pad);
         }
 
