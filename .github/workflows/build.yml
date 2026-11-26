@@ -1,4 +1,4 @@
-name: Build ScienceWord Overlay Pro (C# WPF)
+name: Build ScienceWord Overlay Pro Universal v4 (C# WPF)
 
 on:
   push:
