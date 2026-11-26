@@ -163,6 +163,7 @@ namespace ScienceWordOverlay
         private void BtnClear_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ClearAll();
         private void BtnSyncOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SyncFromOffice();
         private void BtnFillOffice_Click(object sender, RoutedEventArgs e) => _overlay.Surface.FillSelectedOfficeShape();
+        private void ChkWhiteBg_Changed(object sender, RoutedEventArgs e) { if (_overlay != null) _overlay.Surface.ExportWhiteBg = (sender as CheckBox)?.IsChecked == true; }
         private void BtnInsertApp_Click(object sender, RoutedEventArgs e) => _overlay.Surface.InsertIntoTargetApp();
         private void BtnCopyPng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.CopyToClipboard();
         private void BtnSavePng_Click(object sender, RoutedEventArgs e) => _overlay.Surface.SavePng();

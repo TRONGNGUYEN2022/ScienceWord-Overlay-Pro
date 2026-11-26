@@ -489,22 +489,32 @@ namespace ScienceWordOverlay
         }
 
         // ================= TẦNG 3: CHÈN NGƯỢC VÀO MỌI ỨNG DỤNG =================
+        private bool TargetNeedsOpaqueWhiteBg(string procUpper)
+        {
+            if (ExportWhiteBg) return true;
+            // Các phần mềm GDI đời cũ (ScienceWord, Paint, WordPad) biến kênh trong suốt (Alpha=0) thành nền đen kịt khi dán Clipboard
+            return procUpper.Contains("SCIENCEWORD")
+                || procUpper is "SW" or "MSPAINT" or "WORDPAD";
+        }
+
         public void InsertIntoTargetApp()
         {
             var bbox = ComputeContentBBox();
             if (bbox == null) { ShowToast("Chưa có hình tô hay nét vẽ nào để chèn!"); return; }
-            var bmp = RenderExportBitmap(2.5);
-            if (bmp == null) return;
 
+            var dpi = VisualTreeHelper.GetDpi(this);
             string procUpper = LastTargetProcName.ToUpperInvariant();
+
             if (OfficeContext != null || procUpper is "WINWORD" or "POWERPNT" or "EXCEL")
             {
+                var officeBmp = RenderExportBitmap(2.5, forceWhiteBg: ExportWhiteBg);
+                if (officeBmp == null) return;
+
                 string tempPath = Path.Combine(Path.GetTempPath(), $"ScienceWordOverlay_{DateTime.Now.Ticks}.png");
                 var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bmp));
+                encoder.Frames.Add(BitmapFrame.Create(officeBmp));
                 using (var fs = File.Create(tempPath)) encoder.Save(fs);
 
-                var dpi = VisualTreeHelper.GetDpi(this);
                 if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, Scene, dpi.DpiScaleX, dpi.DpiScaleY, out _))
                 {
                     ShowToast($"Đã chèn khớp tọa độ vào {Win32Helper.FriendlyAppName(LastTargetProcName)}!");
@@ -512,11 +522,17 @@ namespace ScienceWordOverlay
                 }
             }
 
-            CopyBitmapSourceToClipboard(bmp);
+            // Dán qua Clipboard (ScienceWord, Paint, Web, Zalo...): xuất đúng tỉ lệ 1:1 pixel vật lý màn hình (dpi.DpiScaleX)
+            // và tự lót nền trắng cho ScienceWord / Paint để không bị ô vuông đen
+            bool useWhite = TargetNeedsOpaqueWhiteBg(procUpper);
+            var clipBmp = RenderExportBitmap(dpi.DpiScaleX, forceWhiteBg: useWhite);
+            if (clipBmp == null) return;
+
+            CopyBitmapSourceToClipboard(clipBmp, opaqueWhite: useWhite);
             if (Win32Helper.SendPasteToWindow(LastTargetHwnd))
-                ShowToast($"Đã tự động dán (Ctrl+V) vào {Win32Helper.FriendlyAppName(LastTargetProcName)}!");
+                ShowToast($"Đã dán đúng tỉ lệ 1:1 vào {Win32Helper.FriendlyAppName(LastTargetProcName)}{(useWhite ? " (nền trắng)" : "")}!");
             else
-                ShowToast("Đã Copy PNG vào Clipboard — hãy bấm Ctrl+V vào ứng dụng đích!");
+                ShowToast("Đã Copy ảnh vào Clipboard — hãy bấm Ctrl+V vào ứng dụng đích!");
         }
 
         // ================= HÀM HÌNH HỌC =================
@@ -1791,16 +1807,17 @@ namespace ScienceWordOverlay
             return new Rect(xs.Min() - pad, ys.Min() - pad, (xs.Max() - xs.Min()) + 2 * pad, (ys.Max() - ys.Min()) + 2 * pad);
         }
 
-        public RenderTargetBitmap? RenderExportBitmap(double scale = 2.0)
+        public RenderTargetBitmap? RenderExportBitmap(double scale = 2.0, bool? forceWhiteBg = null)
         {
             var bbox = ComputeContentBBox();
             if (bbox == null) return null;
+            bool whiteBg = forceWhiteBg ?? ExportWhiteBg;
             int w = Math.Max(16, (int)Math.Ceiling(bbox.Value.Width * scale));
             int h = Math.Max(16, (int)Math.Ceiling(bbox.Value.Height * scale));
             var dv = new DrawingVisual();
             using (var dc = dv.RenderOpen())
             {
-                if (ExportWhiteBg) dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, bbox.Value.Width, bbox.Value.Height));
+                if (whiteBg) dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, bbox.Value.Width, bbox.Value.Height));
                 dc.PushTransform(new TranslateTransform(-bbox.Value.Left, -bbox.Value.Top));
                 RenderScene(dc, cleanExport: true);
                 dc.Pop();
@@ -1811,7 +1828,7 @@ namespace ScienceWordOverlay
             return rtb;
         }
 
-        private static void CopyBitmapSourceToClipboard(BitmapSource bmp)
+        private static void CopyBitmapSourceToClipboard(BitmapSource bmp, bool opaqueWhite = false)
         {
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(bmp));
@@ -1819,17 +1836,21 @@ namespace ScienceWordOverlay
             encoder.Save(ms);
             ms.Position = 0;
             var dataObj = new DataObject();
-            dataObj.SetData("PNG", ms, false);
+            if (!opaqueWhite)
+                dataObj.SetData("PNG", ms, false);
             dataObj.SetImage(bmp);
             Clipboard.SetDataObject(dataObj, true);
         }
 
         public void CopyToClipboard()
         {
-            var bmp = RenderExportBitmap(2.0);
+            var dpi = VisualTreeHelper.GetDpi(this);
+            string procUpper = LastTargetProcName.ToUpperInvariant();
+            bool useWhite = TargetNeedsOpaqueWhiteBg(procUpper);
+            var bmp = RenderExportBitmap(useWhite ? dpi.DpiScaleX : 2.0, forceWhiteBg: useWhite);
             if (bmp == null) { ShowToast("Chưa có hình vẽ nào để Copy!"); return; }
-            CopyBitmapSourceToClipboard(bmp);
-            ShowToast("Đã Copy ảnh PNG nét cao vào Clipboard — nhấn Ctrl+V vào ứng dụng đích!");
+            CopyBitmapSourceToClipboard(bmp, opaqueWhite: useWhite);
+            ShowToast($"Đã Copy ảnh vào Clipboard{(useWhite ? " (nền trắng 1:1)" : " (PNG trong suốt)")} — nhấn Ctrl+V để dán!");
         }
 
         public void SavePng()

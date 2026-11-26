@@ -80,7 +80,7 @@
         <StackPanel>
             <!-- HANG 1: CONG CU VE + SNIPPING TOOL + DUA THAN -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="⋮⋮ W² v7.2" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
+                <TextBlock Text="⋮⋮ W² v7.3" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
                            VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll"
                            MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
 
@@ -170,6 +170,7 @@
 
                 <Button Style="{StaticResource ActionBtn}" Content="Đọc Office" Background="#0D9488" BorderBrush="#5EEAD4" Click="BtnSyncOffice_Click"/>
                 <Button Style="{StaticResource ActionBtn}" Content="Tô Office" Background="#D97706" BorderBrush="#FDE68A" Click="BtnFillOffice_Click"/>
+                <CheckBox Content="Nền trắng" IsChecked="False" Foreground="#E2E8F0" FontSize="10.5" VerticalAlignment="Center" Margin="3,0,4,0" ToolTip="Bật nền trắng thay vì nền trong suốt khi dán ảnh" Checked="ChkWhiteBg_Changed" Unchecked="ChkWhiteBg_Changed"/>
                 <Button Style="{StaticResource ActionBtn}" Content="Chèn App" Background="#2563EB" BorderBrush="#93C5FD" FontWeight="Bold" Click="BtnInsertApp_Click"/>
                 <Button Style="{StaticResource ActionBtn}" Content="Copy" Background="#10B981" Foreground="#052E16" BorderBrush="#6EE7B7" FontWeight="Bold" Click="BtnCopyPng_Click"/>
                 <Button Style="{StaticResource ActionBtn}" Content="PNG" Background="#0284C7" BorderBrush="#7DD3FC" Click="BtnSavePng_Click"/>
