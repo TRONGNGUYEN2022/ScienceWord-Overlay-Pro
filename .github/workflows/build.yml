@@ -1,0 +1,54 @@
+name: Build ScienceWord Overlay Pro Universal v4 (C# WPF)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore ScienceWordOverlay.csproj
+
+      - name: Publish Portable Single-File EXE (Khong can cai .NET)
+        run: >
+          dotnet publish ScienceWordOverlay.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish_portable
+
+      - name: Publish Lite Single-File EXE (Sieu nhe, can .NET 8 Runtime)
+        run: >
+          dotnet publish ScienceWordOverlay.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          -p:PublishSingleFile=true
+          -o publish_lite
+
+      - name: Upload Portable EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScienceWord_Overlay_Pro_Portable_win-x64
+          path: publish_portable/ScienceWord_Overlay_Pro.exe
+
+      - name: Upload Lite EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScienceWord_Overlay_Pro_Lite_win-x64
+          path: publish_lite/ScienceWord_Overlay_Pro.exe
