@@ -57,18 +57,26 @@ namespace ScienceWordOverlay.Models
     {
         public List<string> VertexIds { get; set; } = new();
         public string ColorHex { get; set; } = "#FACC15";
-        public double Opacity { get; set; } = 0.42;
+        public double Opacity { get; set; } = 0.45;
     }
 
     public class Solid3DScene
     {
+        public string Kind { get; set; } = "poly"; // poly | cone | cylinder | sphere
         public string Name { get; set; } = "Chóp S.ABCD";
-        public Point CenterScreen { get; set; } = new(420, 420);
+        public Point CenterScreen { get; set; } = new(440, 420);
         public double Scale { get; set; } = 135.0;
         public double YawDeg { get; set; } = -28.0;
         public double PitchDeg { get; set; } = 22.0;
         public double SplitAmount { get; set; } = 0.0;
         public bool AutoHiddenLines { get; set; } = true;
+
+        // Khối đặc có màu (hỗ trợ cho Nón, Trụ, Cầu và mọi đa diện)
+        public bool IsSolidShaded { get; set; } = true;
+        public string SolidColorHex { get; set; } = "#38BDF8";
+        public double SolidOpacity { get; set; } = 0.50;
+        public double Radius { get; set; } = 0.92;
+        public double Height { get; set; } = 1.95;
 
         public List<Vertex3D> Vertices { get; set; } = new();
         public List<Edge3D> Edges { get; set; } = new();
@@ -88,18 +96,51 @@ namespace ScienceWordOverlay.Models
             return new Vec3(x1, y1 * Math.Cos(rx) - z1 * Math.Sin(rx), y1 * Math.Sin(rx) + z1 * Math.Cos(rx));
         }
 
+        // Hướng vectơ đơn vị từ gốc về phía Camera trong hệ tọa độ cục bộ
+        public Vec3 GetCameraLocalDir()
+        {
+            double ry = YawDeg * Math.PI / 180.0;
+            double rx = PitchDeg * Math.PI / 180.0;
+            return new Vec3(-Math.Cos(rx) * Math.Sin(ry), Math.Sin(rx), Math.Cos(rx) * Math.Cos(ry)).Normalized();
+        }
+
         public Point Project(Vec3 p, out double depthZ)
         {
             Vec3 r = RotatePoint(p);
-            double persp = 1.0 / (1.0 - r.Z * 0.09);
+            double persp = 1.0 / (1.0 - r.Z * 0.085);
             depthZ = r.Z;
             return new Point(CenterScreen.X + r.X * Scale * persp, CenterScreen.Y - r.Y * Scale * persp);
         }
 
+        public Vec3 ComputeCentroid()
+        {
+            if (Vertices.Count == 0) return new Vec3(0, 0, 0);
+            double sx = 0, sy = 0, sz = 0;
+            foreach (var v in Vertices) { sx += v.X; sy += v.Y; sz += v.Z; }
+            return new Vec3(sx / Vertices.Count, sy / Vertices.Count, sz / Vertices.Count);
+        }
+
+        public Vec3 GetOutwardFaceNormal(Face3D f)
+        {
+            if (f.VertexIds.Count < 3) return new Vec3(0, 0, 1);
+            var v0 = GetV(f.VertexIds[0]); var v1 = GetV(f.VertexIds[1]); var v2 = GetV(f.VertexIds[2]);
+            if (v0 == null || v1 == null || v2 == null) return new Vec3(0, 0, 1);
+
+            Vec3 n = Vec3.Cross(v1.Pos - v0.Pos, v2.Pos - v0.Pos).Normalized();
+            Vec3 faceCenter = new(0, 0, 0);
+            int cnt = 0;
+            foreach (var id in f.VertexIds) { var v = GetV(id); if (v != null) { faceCenter = faceCenter + v.Pos; cnt++; } }
+            if (cnt > 0) faceCenter = faceCenter * (1.0 / cnt);
+            Vec3 solidCenter = ComputeCentroid();
+            if (Vec3.Dot(n, faceCenter - solidCenter) < 0) n = n * -1.0;
+            return n;
+        }
+
+        public bool IsFaceFrontFacing(Face3D f) => RotatePoint(GetOutwardFaceNormal(f)).Z > 0.0;
+
         public bool TryGetCutPlane(out Vec3 origin, out Vec3 normal)
         {
-            origin = new Vec3(0, 0, 0);
-            normal = new Vec3(0, 1, 0);
+            origin = new Vec3(0, 0, 0); normal = new Vec3(0, 1, 0);
             var sec = Sections.LastOrDefault();
             if (sec == null || sec.VertexIds.Count < 3) return false;
             var a = GetV(sec.VertexIds[0]); var b = GetV(sec.VertexIds[1]); var c = GetV(sec.VertexIds[2]);
@@ -114,9 +155,7 @@ namespace ScienceWordOverlay.Models
         {
             Vec3 p = v.Pos;
             if (applySplit && SplitAmount > 0.01 && TryGetCutPlane(out Vec3 o, out Vec3 n))
-            {
                 if (Vec3.Dot(p - o, n) > 0.04) p = p + n * (SplitAmount * 0.85);
-            }
             return p;
         }
 
@@ -134,128 +173,97 @@ namespace ScienceWordOverlay.Models
             return true;
         }
 
-        public bool IsFaceFrontFacing(Face3D f)
-        {
-            if (f.VertexIds.Count < 3) return true;
-            var v0 = GetV(f.VertexIds[0]); var v1 = GetV(f.VertexIds[1]); var v2 = GetV(f.VertexIds[2]);
-            if (v0 == null || v1 == null || v2 == null) return true;
-            Vec3 p0 = RotatePoint(v0.Pos), p1 = RotatePoint(v1.Pos), p2 = RotatePoint(v2.Pos);
-            return Vec3.Cross(p1 - p0, p2 - p0).Z > 0;
-        }
-
         public Vertex3D? ConstructParallelEdge3D(string fromVertexId, Edge3D refEdge, Func<string> labelGen)
         {
-            var m = GetV(fromVertexId);
-            var u1 = GetV(refEdge.V1Id); var u2 = GetV(refEdge.V2Id);
+            var m = GetV(fromVertexId); var u1 = GetV(refEdge.V1Id); var u2 = GetV(refEdge.V2Id);
             if (m == null || u1 == null || u2 == null) return null;
-
             Vec3 dir = (u2.Pos - u1.Pos).Normalized();
-            Vertex3D? bestHit = null;
-            double bestDist = 0.09;
+            Vertex3D? bestHit = null; double bestDist = 0.09;
 
             foreach (var e in Edges)
             {
                 if (e == refEdge || e.V1Id == fromVertexId || e.V2Id == fromVertexId) continue;
                 var a = GetV(e.V1Id); var b = GetV(e.V2Id);
                 if (a == null || b == null) continue;
-
                 Vec3 d2 = b.Pos - a.Pos, w0 = m.Pos - a.Pos;
                 double aDot = Vec3.Dot(dir, dir), bDot = Vec3.Dot(dir, d2), cDot = Vec3.Dot(d2, d2);
                 double dDot = Vec3.Dot(dir, w0), eDot = Vec3.Dot(d2, w0);
                 double denom = aDot * cDot - bDot * bDot;
                 if (Math.Abs(denom) < 1e-6) continue;
-
                 double s = (bDot * eDot - cDot * dDot) / denom;
                 double t = (aDot * eDot - bDot * dDot) / denom;
                 if (t < 0.02 || t > 0.98 || Math.Abs(s) < 0.05) continue;
-
                 double gap = ((m.Pos + dir * s) - (a.Pos + d2 * t)).Length;
                 if (gap < bestDist)
                 {
-                    bestDist = gap;
-                    Vec3 pSeg = a.Pos + d2 * t;
-                    bestHit = new Vertex3D
-                    {
-                        Id = $"v3_{NextIdx++}", Label = labelGen(),
-                        X = pSeg.X, Y = pSeg.Y, Z = pSeg.Z,
-                        HostEdgeV1 = e.V1Id, HostEdgeV2 = e.V2Id, HostT = t
-                    };
+                    bestDist = gap; Vec3 pSeg = a.Pos + d2 * t;
+                    bestHit = new Vertex3D { Id = $"v3_{NextIdx++}", Label = labelGen(), X = pSeg.X, Y = pSeg.Y, Z = pSeg.Z, HostEdgeV1 = e.V1Id, HostEdgeV2 = e.V2Id, HostT = t };
                 }
             }
-
-            if (bestHit != null)
-            {
-                Vertices.Add(bestHit);
-                Edges.Add(new Edge3D { V1Id = fromVertexId, V2Id = bestHit.Id, IsConstruction = true });
-            }
+            if (bestHit != null) { Vertices.Add(bestHit); Edges.Add(new Edge3D { V1Id = fromVertexId, V2Id = bestHit.Id, IsConstruction = true }); }
             return bestHit;
         }
 
         public static Solid3DScene CreatePreset(string kind, Point center)
         {
             var s = new Solid3DScene { CenterScreen = center };
-            void AddV(string id, string lbl, double x, double y, double z) =>
-                s.Vertices.Add(new Vertex3D { Id = id, Label = lbl, X = x, Y = y, Z = z });
+            void AddV(string id, string lbl, double x, double y, double z) => s.Vertices.Add(new Vertex3D { Id = id, Label = lbl, X = x, Y = y, Z = z });
             void AddE(string a, string b) => s.Edges.Add(new Edge3D { V1Id = a, V2Id = b });
             void AddF(params string[] vs) => s.Faces.Add(new Face3D { VertexIds = vs.ToList() });
 
             if (kind is "pyramid_para" or "pyramid_perp")
             {
+                s.Kind = "poly"; s.IsSolidShaded = false;
                 s.Name = kind == "pyramid_perp" ? "Chóp S.ABCD (SA ⊥ đáy)" : "Chóp S.ABCD (đáy hình bình hành)";
-                double sx = kind == "pyramid_perp" ? -1.05 : -0.35;
-                double sz = kind == "pyramid_perp" ? 0.65 : 0.05;
+                double sx = kind == "pyramid_perp" ? -1.05 : -0.35, sz = kind == "pyramid_perp" ? 0.65 : 0.05;
                 AddV("S", "S", sx, 1.35, sz);
                 AddV("A", "A", -1.05, -0.65, 0.65); AddV("B", "B", 0.65, -0.65, 0.65);
                 AddV("C", "C", 1.15, -0.65, -0.65); AddV("D", "D", -0.55, -0.65, -0.65);
                 foreach (var (a, b) in new[] { ("S","A"), ("S","B"), ("S","C"), ("S","D"), ("A","B"), ("B","C"), ("C","D"), ("D","A") }) AddE(a, b);
-                AddF("A", "D", "C", "B"); AddF("S", "A", "B"); AddF("S", "B", "C"); AddF("S", "C", "D"); AddF("S", "D", "A");
+                AddF("A", "B", "C", "D"); AddF("S", "A", "B"); AddF("S", "B", "C"); AddF("S", "C", "D"); AddF("S", "D", "A");
             }
             else if (kind == "tetra")
             {
-                s.Name = "Tứ diện S.ABC";
+                s.Kind = "poly"; s.IsSolidShaded = false; s.Name = "Tứ diện S.ABC";
                 AddV("S", "S", -0.15, 1.35, 0.0);
                 AddV("A", "A", -1.0, -0.65, 0.65); AddV("B", "B", 0.95, -0.65, 0.65); AddV("C", "C", 0.10, -0.65, -0.95);
                 foreach (var (a, b) in new[] { ("S","A"), ("S","B"), ("S","C"), ("A","B"), ("B","C"), ("C","A") }) AddE(a, b);
-                AddF("A", "C", "B"); AddF("S", "A", "B"); AddF("S", "B", "C"); AddF("S", "C", "A");
+                AddF("A", "B", "C"); AddF("S", "A", "B"); AddF("S", "B", "C"); AddF("S", "C", "A");
             }
             else if (kind is "cube" or "cuboid")
             {
+                s.Kind = "poly"; s.IsSolidShaded = false;
                 s.Name = kind == "cube" ? "Hình lập phương ABCD.A'B'C'D'" : "Hình hộp chữ nhật ABCD.A'B'C'D'";
                 double rx = kind == "cube" ? 0.85 : 1.15, ry = 0.85, rz = kind == "cube" ? 0.85 : 0.70;
                 AddV("A", "A", -rx, -ry, rz);  AddV("B", "B", rx, -ry, rz);  AddV("C", "C", rx, -ry, -rz);  AddV("D", "D", -rx, -ry, -rz);
                 AddV("A1", "A'", -rx, ry, rz); AddV("B1", "B'", rx, ry, rz); AddV("C1", "C'", rx, ry, -rz); AddV("D1", "D'", -rx, ry, -rz);
                 foreach (var (a, b) in new[] { ("A","B"),("B","C"),("C","D"),("D","A"),("A1","B1"),("B1","C1"),("C1","D1"),("D1","A1"),("A","A1"),("B","B1"),("C","C1"),("D","D1") }) AddE(a, b);
-                AddF("A","D","C","B"); AddF("A1","B1","C1","D1"); AddF("A","B","B1","A1"); AddF("B","C","C1","B1"); AddF("C","D","D1","C1"); AddF("D","A","A1","D1");
+                AddF("A","B","C","D"); AddF("A1","B1","C1","D1"); AddF("A","B","B1","A1"); AddF("B","C","C1","B1"); AddF("C","D","D1","C1"); AddF("D","A","A1","D1");
             }
             else if (kind == "prism_tri")
             {
-                s.Name = "Lăng trụ tam giác đứng ABC.A'B'C'";
+                s.Kind = "poly"; s.IsSolidShaded = false; s.Name = "Lăng trụ tam giác đứng ABC.A'B'C'";
                 AddV("A", "A", -0.95, -0.85, 0.65); AddV("B", "B", 0.95, -0.85, 0.65); AddV("C", "C", 0.0, -0.85, -0.85);
                 AddV("A1", "A'", -0.95, 0.95, 0.65); AddV("B1", "B'", 0.95, 0.95, 0.65); AddV("C1", "C'", 0.0, 0.95, -0.85);
                 foreach (var (a, b) in new[] { ("A","B"),("B","C"),("C","A"),("A1","B1"),("B1","C1"),("C1","A1"),("A","A1"),("B","B1"),("C","C1") }) AddE(a, b);
-                AddF("A","C","B"); AddF("A1","B1","C1"); AddF("A","B","B1","A1"); AddF("B","C","C1","B1"); AddF("C","A","A1","C1");
+                AddF("A","B","C"); AddF("A1","B1","C1"); AddF("A","B","B1","A1"); AddF("B","C","C1","B1"); AddF("C","A","A1","C1");
             }
-            else
+            else if (kind == "cone")
             {
-                bool isCone = kind == "cone";
-                s.Name = isCone ? "Hình nón 3D" : "Hình trụ 3D";
-                AddV("O", "O", 0, -0.85, 0);
-                if (isCone) AddV("S", "S", 0, 1.25, 0); else AddV("O1", "O'", 0, 0.95, 0);
-                int n = 16;
-                for (int i = 0; i < n; i++)
-                {
-                    double ang = 2.0 * Math.PI * i / n, x = 0.95 * Math.Cos(ang), z = 0.95 * Math.Sin(ang);
-                    AddV($"b{i}", "", x, -0.85, z);
-                    if (!isCone) AddV($"t{i}", "", x, 0.95, z);
-                }
-                for (int i = 0; i < n; i++)
-                {
-                    int nxt = (i + 1) % n;
-                    AddE($"b{i}", $"b{nxt}");
-                    if (isCone) { if (i % 4 == 0) AddE("S", $"b{i}"); AddF("S", $"b{i}", $"b{nxt}"); }
-                    else { AddE($"t{i}", $"t{nxt}"); if (i % 4 == 0) AddE($"b{i}", $"t{i}"); AddF($"b{i}", $"b{nxt}", $"t{nxt}", $"t{i}"); }
-                }
-                if (isCone) AddE("S", "O"); else AddE("O", "O1");
+                s.Kind = "cone"; s.Name = "Hình nón 3D"; s.IsSolidShaded = true; s.SolidColorHex = "#38BDF8"; s.Radius = 0.95; s.Height = 2.05;
+                AddV("S", "S", 0, s.Height * 0.5, 0);
+                AddV("O", "O", 0, -s.Height * 0.5, 0);
+            }
+            else if (kind == "cylinder")
+            {
+                s.Kind = "cylinder"; s.Name = "Hình trụ 3D"; s.IsSolidShaded = true; s.SolidColorHex = "#34D399"; s.Radius = 0.90; s.Height = 1.90;
+                AddV("O1", "O'", 0, s.Height * 0.5, 0);
+                AddV("O", "O", 0, -s.Height * 0.5, 0);
+            }
+            else if (kind == "sphere")
+            {
+                s.Kind = "sphere"; s.Name = "Hình cầu 3D"; s.IsSolidShaded = true; s.SolidColorHex = "#F59E0B"; s.Radius = 1.05; s.Height = 2.10;
+                AddV("O", "O", 0, 0, 0);
             }
             return s;
         }

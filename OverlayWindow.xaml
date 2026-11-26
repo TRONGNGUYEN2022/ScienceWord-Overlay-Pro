@@ -2,15 +2,24 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ScienceWordOverlay"
-        Title="ScienceWord Overlay Canvas"
+        Title="ScienceWord Overlay Pro"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        ShowInTaskbar="False"
-        ResizeMode="NoResize"
-        WindowState="Maximized">
+        WindowState="Maximized"
+        ShowInTaskbar="False">
     <Grid>
-        <local:OverlaySurface x:Name="Surface" />
+        <local:OverlaySurface x:Name="Surface"/>
+        <Canvas x:Name="FloatingUiLayer">
+            <Border x:Name="ContextMenuBar" Visibility="Collapsed"
+                    Background="#F20F172A" BorderBrush="#60A5FA" BorderThickness="1.3"
+                    CornerRadius="8" Padding="5,3">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.45" Color="Black"/>
+                </Border.Effect>
+                <StackPanel x:Name="ContextMenuItems" Orientation="Horizontal"/>
+            </Border>
+        </Canvas>
     </Grid>
 </Window>
