@@ -1,4 +1,4 @@
-name: Build ScienceWord Overlay Pro Universal v4 (C# WPF)
+name: Build ScienceWord Overlay Pro Universal v10.2 (C# WPF)
 
 on:
   push:
@@ -18,8 +18,8 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore ScienceWordOverlay.csproj
+      - name: Restore dependencies (win-x64)
+        run: dotnet restore ScienceWordOverlay.csproj -r win-x64
 
       - name: Publish Portable Single-File EXE (Khong can cai .NET)
         run: >
@@ -39,6 +39,7 @@ jobs:
           -r win-x64
           --self-contained false
           -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=false
           -o publish_lite
 
       - name: Upload Portable EXE Artifact
