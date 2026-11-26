@@ -23,13 +23,29 @@ namespace ScienceWordOverlay
         public List<MagicFillLayer> MagicFills { get; } = new();
         public OfficeSelectionContext? OfficeContext { get; private set; }
 
-        // Trạng thái Khối tròn xoay 3D & Diện tích tích phân
+        // Nền bảng (mặc định Trong suốt) & Khối 3D thực xoay/tách như clip
+        public CanvasBackgroundMode CanvasBg { get; set; } = CanvasBackgroundMode.Transparent;
+        public Solid3DScene? Solid3D { get; set; }
+        private bool _isOrbiting3D = false;
+        private Point _orbitLastPos;
+        private readonly List<string> _step3DVertices = new();
+        private string? _pending3DParallelVertex;
+
+        // Trạng thái Khối tròn xoay 3D & Diện tích tích phân (hỗ trợ nhiều cận & tách riêng màu S / V)
         public RevolutionScene? RevScene { get; set; }
         public MathRenderMode RevMode { get; set; } = MathRenderMode.Area2D;
         public double RevSweepDeg { get; set; } = 360.0;
         public double RevXCompression { get; set; } = 0.28;
         public bool RevShowCaps { get; set; } = true;
-        private int _draggingRevHandle = 0; // 1 = a, 2 = b
+        public bool RevShowAreaIn3D { get; set; } = true;
+        public string Area2DColorHex { get; set; } = "#EF4444";
+        public string Volume3DColorHex { get; set; } = "#3B82F6";
+        private int _draggingRevHandle = -1;
+
+        private static readonly string[] VolumePalette = { "#3B82F6", "#06B6D4", "#10B981", "#8B5CF6", "#F59E0B" };
+        private static readonly string[] AreaPalette   = { "#EF4444", "#38BDF8", "#FACC15", "#FB923C", "#34D399", "#EC4899" };
+        private int _volColorIdx = 0;
+        private int _areaColorIdx = 0;
 
         // Trạng thái Chọn vùng kiểu Snipping Tool (Chữ nhật & Tự do Lasso)
         public Rect? ActiveSnipRect { get; private set; }
@@ -143,13 +159,88 @@ namespace ScienceWordOverlay
         {
             if (RevScene != null && RevScene.IsValid)
             {
+                var regs = RevScene.ComputeRegionMetrics();
                 var (s, v, vPi) = RevScene.ComputeMetrics();
-                MetricsUpdated?.Invoke($"S = {s:0.00} cm²  |  V = {vPi:0.00}π ≈ {v:0.00} cm³");
+                if (regs.Count > 1)
+                {
+                    string parts = string.Join(" | ", regs.Select((r, idx) => $"S{idx + 1}={r.areaCm2:0.00}"));
+                    MetricsUpdated?.Invoke($"{parts}  |  Tổng S={s:0.00} cm²  |  V={vPi:0.00}π");
+                }
+                else
+                {
+                    MetricsUpdated?.Invoke($"S = {s:0.00} cm²  |  V = {vPi:0.00}π ≈ {v:0.00} cm³");
+                }
             }
             else
             {
-                MetricsUpdated?.Invoke("Chọn 1 Trục + 1 Đường cong trong Word rồi bấm [Đọc Office] để Quay 3D & tính V");
+                MetricsUpdated?.Invoke("Chọn Trục + Đường cong trong Word -> [Đọc Office] để chia nhiều cận & Quay 3D");
             }
+        }
+
+        public void AddRevolutionBound()
+        {
+            if (RevScene == null || !RevScene.IsValid) { SyncFromOffice(); if (RevScene == null || !RevScene.IsValid) return; }
+            int idx = RevScene.AddSplitBound();
+            if (idx >= 0) { NotifyMetrics(); InvalidateVisual(); ShowToast($"Đã thêm cận [{RevolutionScene.GetBoundLabel(idx)}] ({RevScene.SplitBounds.Count - 1} miền S). Kéo chốt để chỉnh!", 3600); }
+            else ShowToast("Khoảng đã hẹp hoặc đạt tối đa 10 cận!");
+        }
+
+        public void RemoveRevolutionBound()
+        {
+            if (RevScene == null || !RevScene.IsValid) return;
+            if (RevScene.RemoveSplitBound()) { NotifyMetrics(); InvalidateVisual(); ShowToast($"Đã bớt 1 cận (còn {RevScene.SplitBounds.Count - 1} miền S)."); }
+            else ShowToast("Cần giữ tối thiểu 2 cận [a, b]!");
+        }
+
+        public string CycleArea2DColor()
+        {
+            _areaColorIdx = (_areaColorIdx + 1) % AreaPalette.Length;
+            Area2DColorHex = AreaPalette[_areaColorIdx];
+            if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Area2D) RevScene.SetActiveRegionColor(Area2DColorHex);
+            InvalidateVisual(); ShowToast($"Đã đổi màu Diện tích (S): {Area2DColorHex}");
+            return Area2DColorHex;
+        }
+
+        public string CycleVolume3DColor()
+        {
+            _volColorIdx = (_volColorIdx + 1) % VolumePalette.Length;
+            Volume3DColorHex = VolumePalette[_volColorIdx];
+            InvalidateVisual(); ShowToast($"Đã đổi màu Thể tích 3D (V): {Volume3DColorHex}");
+            return Volume3DColorHex;
+        }
+
+        public void SetCanvasBackground(CanvasBackgroundMode mode)
+        {
+            CanvasBg = mode;
+            if (mode is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard)
+            {
+                if (StrokeColorHex.Equals("#0F172A", StringComparison.OrdinalIgnoreCase)) StrokeColorHex = "#F8FAFC";
+            }
+            else
+            {
+                if (StrokeColorHex.Equals("#F8FAFC", StringComparison.OrdinalIgnoreCase) || StrokeColorHex.Equals("#FFFFFF", StringComparison.OrdinalIgnoreCase)) StrokeColorHex = "#0F172A";
+            }
+            InvalidateVisual();
+            string name = mode switch
+            {
+                CanvasBackgroundMode.ChalkboardGrid => "Bảng xanh kẻ ô (như clip)",
+                CanvasBackgroundMode.WhiteboardPlain => "Bảng trắng trơn",
+                CanvasBackgroundMode.WhiteboardGrid => "Giấy ô ly / kẻ ô",
+                CanvasBackgroundMode.Blackboard => "Bảng đen phấn trắng",
+                _ => "Trong suốt (Mặc định)"
+            };
+            ShowToast($"Đã chuyển nền: {name}");
+        }
+
+        public void SpawnInteractiveSolid3D(string presetKind)
+        {
+            double cx = ActualWidth > 100 ? ActualWidth * 0.44 : 480;
+            double cy = ActualHeight > 100 ? ActualHeight * 0.54 : 420;
+            Solid3D = Solid3DScene.CreatePreset(presetKind, new Point(cx, cy));
+            _step3DVertices.Clear(); _pending3DParallelVertex = null;
+            SetTool("orbit_3d");
+            InvalidateVisual();
+            ShowToast($"Đã tạo {Solid3D.Name}! Kéo chuột trái để xoay 3D (tự động đổi nét đứt/liền).", 4200);
         }
 
         // ================= UNDO / REDO =================
@@ -193,6 +284,9 @@ namespace ScienceWordOverlay
             MagicFills.Clear();
             OfficeContext = null;
             RevScene = null;
+            Solid3D = null;
+            _step3DVertices.Clear();
+            _pending3DParallelVertex = null;
             ActiveSnipRect = null;
             ActiveSnipLasso.Clear();
             ClearActiveSteps();
@@ -364,7 +458,7 @@ namespace ScienceWordOverlay
             _activeStroke = null;
             _draggingPointId = null;
             _draggingTextId = null;
-            _draggingRevHandle = 0;
+            _draggingRevHandle = -1;
             _selectedPointId = null;
             _selectedShapeId = null;
             InvalidateVisual();
@@ -742,20 +836,165 @@ namespace ScienceWordOverlay
 
             if (e.ChangedButton == MouseButton.Right)
             {
+                if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Area2D && TryHitRevRegion(pos, out int rIdx))
+                {
+                    RevScene.RegionEnabled[rIdx] = !RevScene.RegionEnabled[rIdx];
+                    NotifyMetrics(); InvalidateVisual();
+                    ShowToast(RevScene.RegionEnabled[rIdx] ? $"Đã bật tô miền S{rIdx + 1}" : $"Đã ẩn miền S{rIdx + 1} (tạo khoảng trống)");
+                    return;
+                }
                 if (Tool == "fill_area" && _stepPoints.Count >= 3) FinishPolygonFill();
-                else { _stepPoints.Clear(); ActiveSnipRect = null; ActiveSnipLasso.Clear(); InvalidateVisual(); }
+                else { _stepPoints.Clear(); _step3DVertices.Clear(); _pending3DParallelVertex = null; ActiveSnipRect = null; ActiveSnipLasso.Clear(); InvalidateVisual(); }
                 return;
             }
             if (e.ChangedButton != MouseButton.Left) return;
 
-            // 0. Ưu tiên kéo 2 chốt đỏ [a], [b] của khối tròn xoay 3D bất kỳ lúc nào đang hiện
+            // 0. Ưu tiên kéo các chốt đỏ cận [a], [b], [c]... (hoặc Shift+Click trên trục để đặt thêm cận)
             if (RevScene != null && RevScene.IsValid)
             {
-                Point hA = RevScene.ToScreen2D(RevScene.LimitA, 0);
-                Point hB = RevScene.ToScreen2D(RevScene.LimitB, 0);
-                double dA = Dist(pos, hA), dB = Dist(pos, hB);
-                if (dA <= 16.0 && dA <= dB) { _draggingRevHandle = 1; CaptureMouse(); return; }
-                if (dB <= 16.0) { _draggingRevHandle = 2; CaptureMouse(); return; }
+                RevScene.EnsureBoundsInitialized();
+                int bestHandle = -1; double bestD = 16.0;
+                for (int i = 0; i < RevScene.SplitBounds.Count; i++)
+                {
+                    double d = Dist(pos, RevScene.ToScreen2D(RevScene.SplitBounds[i], 0));
+                    if (d <= bestD) { bestD = d; bestHandle = i; }
+                }
+                if (bestHandle >= 0) { _draggingRevHandle = bestHandle; CaptureMouse(); return; }
+
+                if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                {
+                    double dx = pos.X - RevScene.AxisOrigin.X, dy = pos.Y - RevScene.AxisOrigin.Y;
+                    double t = dx * RevScene.AxisU.X + dy * RevScene.AxisU.Y;
+                    double r = Math.Abs(dx * RevScene.AxisV.X + dy * RevScene.AxisV.Y);
+                    if (r <= 24.0 && t >= RevScene.TMin && t <= RevScene.TMax)
+                    {
+                        int addedIdx = RevScene.AddSplitBound(t);
+                        if (addedIdx >= 0) { _draggingRevHandle = addedIdx; CaptureMouse(); NotifyMetrics(); InvalidateVisual(); ShowToast($"Đã đặt thêm cận [{RevolutionScene.GetBoundLabel(addedIdx)}]!"); return; }
+                    }
+                }
+                if (Tool == "select" && RevMode == MathRenderMode.Area2D && TryHitRevRegion(pos, out int hitReg))
+                {
+                    RevScene.ActiveRegionIndex = hitReg; InvalidateVisual();
+                    ShowToast($"Đang chọn miền S{hitReg + 1} — chọn màu ở dải [Tô:] để đổi màu riêng (Chuột phải để ẩn/hiện)!", 3600);
+                    return;
+                }
+            }
+
+            // 0.2 Tương tác Khối 3D thực (Xoay, Điểm trên cạnh, Nối cạnh, Song song 3D, Thiết diện)
+            if (Solid3D != null && Tool is "orbit_3d" or "point_edge_3d" or "edge_3d" or "parallel_3d" or "section_3d")
+            {
+                if (Tool == "orbit_3d") { _isOrbiting3D = true; _orbitLastPos = pos; CaptureMouse(); return; }
+                if (Tool == "point_edge_3d")
+                {
+                    var hit = FindNearest3DEdge(pos, 16.0);
+                    if (hit != null)
+                    {
+                        var (edge, tParam) = hit.Value;
+                        var v1 = Solid3D.GetV(edge.V1Id)!; var v2 = Solid3D.GetV(edge.V2Id)!;
+                        Vec3 p3 = v1.Pos + (v2.Pos - v1.Pos) * tParam;
+                        string lbl = Next3DLabel();
+                        Solid3D.Vertices.Add(new Vertex3D { Id = $"v3_{Solid3D.NextIdx++}", Label = lbl, X = p3.X, Y = p3.Y, Z = p3.Z, HostEdgeV1 = edge.V1Id, HostEdgeV2 = edge.V2Id, HostT = tParam });
+                        InvalidateVisual(); ShowToast($"Đã chấm điểm {lbl} thuộc cạnh {v1.Label}{v2.Label}!");
+                    }
+                    else ShowToast("Hãy click trực tiếp vào 1 cạnh của khối 3D!");
+                    return;
+                }
+                if (Tool == "edge_3d")
+                {
+                    var v = FindNearest3DVertex(pos, 18.0);
+                    if (v != null)
+                    {
+                        _step3DVertices.Add(v.Id);
+                        if (_step3DVertices.Count == 2)
+                        {
+                            if (_step3DVertices[0] != _step3DVertices[1]) Solid3D.Edges.Add(new Edge3D { V1Id = _step3DVertices[0], V2Id = _step3DVertices[1], IsConstruction = true });
+                            _step3DVertices.Clear();
+                        }
+                        InvalidateVisual();
+                    }
+                    return;
+                }
+                if (Tool == "parallel_3d")
+                {
+                    if (_pending3DParallelVertex == null)
+                    {
+                        var v = FindNearest3DVertex(pos, 18.0);
+                        if (v != null) { _pending3DParallelVertex = v.Id; ShowToast($"Đã chọn {v.Label}. Click cạnh chuẩn song song (vd: AB)!"); InvalidateVisual(); }
+                        else ShowToast("Bước 1: Click chọn điểm đi qua trên khối 3D (vd: M)");
+                    }
+                    else
+                    {
+                        var hit = FindNearest3DEdge(pos, 18.0);
+                        if (hit != null)
+                        {
+                            var newV = Solid3D.ConstructParallelEdge3D(_pending3DParallelVertex, hit.Value.edge, Next3DLabel);
+                            _pending3DParallelVertex = null; InvalidateVisual();
+                            ShowToast(newV != null ? $"Đã dựng đường song song 3D cắt tại {newV.Label}!" : "Không tìm thấy cạnh đối diện đồng phẳng để cắt!");
+                        }
+                    }
+                    return;
+                }
+                if (Tool == "section_3d")
+                {
+                    var v = FindNearest3DVertex(pos, 18.0);
+                    if (v != null)
+                    {
+                        if (_step3DVertices.Count >= 3 && v.Id == _step3DVertices[0])
+                        {
+                            Solid3D.Sections.Add(new Section3D { VertexIds = new List<string>(_step3DVertices), ColorHex = FillColorHex, Opacity = FillOpacity });
+                            _step3DVertices.Clear(); ShowToast("Đã tô Thiết diện 3D! Kéo thanh [Tách] để tách đôi khối!", 4000);
+                        }
+                        else if (!_step3DVertices.Contains(v.Id))
+                        {
+                            _step3DVertices.Add(v.Id); ShowToast($"Thiết diện: đã chọn {_step3DVertices.Count} đỉnh. Click lại đỉnh đầu để khép kín!");
+                        }
+                        InvalidateVisual();
+                    }
+                    return;
+                }
+            }
+
+            // 0.3 Công cụ dựng hình 2D mới: Song song (//) và Giao điểm
+            if (Tool == "parallel_2d")
+            {
+                if (_stepPoints.Count == 0)
+                {
+                    var pt = FindNearestPoint(pos, 16.0) ?? GetOrCreatePoint(pos);
+                    _stepPoints.Add(pt.Id); ShowToast($"Đã chọn điểm {pt.Label}. Click đoạn thẳng mẫu để kẻ song song!"); InvalidateVisual();
+                }
+                else
+                {
+                    var sh = FindNearestSegment(pos, 18.0); var v = GetPoint(_stepPoints[0]);
+                    if (sh != null && v != null)
+                    {
+                        var s1 = GetPoint(sh.P1Id); var s2 = GetPoint(sh.P2Id);
+                        if (s1 != null && s2 != null)
+                        {
+                            SaveHistory();
+                            Vector dir = new(s2.X - s1.X, s2.Y - s1.Y); double len = Math.Max(120.0, dir.Length); dir.Normalize();
+                            var pEnd = GetOrCreatePoint(new Point(v.X + dir.X * len, v.Y + dir.Y * len));
+                            AddShape("segment", v.Id, pEnd.Id); _stepPoints.Clear();
+                            ShowToast($"Đã dựng đường song song {v.Label}{pEnd.Label}!"); InvalidateVisual();
+                        }
+                    }
+                }
+                return;
+            }
+            if (Tool == "intersect_2d")
+            {
+                var sh = FindNearestSegment(pos, 16.0);
+                if (sh != null)
+                {
+                    if (_selectedShapeId == null) { _selectedShapeId = sh.Id; ShowToast("Đã chọn đoạn 1. Click đoạn 2 để lấy giao điểm!"); InvalidateVisual(); }
+                    else
+                    {
+                        var sh1 = Scene.Shapes.FirstOrDefault(x => x.Id == _selectedShapeId); _selectedShapeId = null;
+                        if (sh1 != null && sh1.Id != sh.Id && TryIntersect2DSegments(sh1, sh, out Point inter)) { SaveHistory(); var pt = GetOrCreatePoint(inter); ShowToast($"Đã chấm giao điểm {pt.Label}!"); }
+                        else ShowToast("Hai đoạn thẳng không cắt nhau!");
+                        InvalidateVisual();
+                    }
+                }
+                return;
             }
 
             // 0.5 Nếu đang có nhóm đối tượng được chọn và click vào bên trong khung nhóm -> Kéo di chuyển TOÀN BỘ nhóm!
@@ -976,12 +1215,19 @@ namespace ScienceWordOverlay
             Point pos = e.GetPosition(this);
             _mousePos = pos;
 
-            if (_draggingRevHandle != 0 && RevScene != null && RevScene.IsValid)
+            if (_isOrbiting3D && Solid3D != null)
+            {
+                Solid3D.YawDeg += (pos.X - _orbitLastPos.X) * 0.55;
+                Solid3D.PitchDeg = Math.Clamp(Solid3D.PitchDeg + (pos.Y - _orbitLastPos.Y) * 0.45, -75, 75);
+                _orbitLastPos = pos;
+                InvalidateVisual();
+                return;
+            }
+
+            if (_draggingRevHandle >= 0 && RevScene != null && RevScene.IsValid)
             {
                 double dx = pos.X - RevScene.AxisOrigin.X, dy = pos.Y - RevScene.AxisOrigin.Y;
-                double t = Math.Clamp(dx * RevScene.AxisU.X + dy * RevScene.AxisU.Y, RevScene.TMin, RevScene.TMax);
-                if (_draggingRevHandle == 1) RevScene.LimitA = t;
-                else RevScene.LimitB = t;
+                RevScene.SetBoundAt(_draggingRevHandle, dx * RevScene.AxisU.X + dy * RevScene.AxisU.Y);
                 NotifyMetrics();
                 InvalidateVisual();
                 return;
@@ -1064,7 +1310,8 @@ namespace ScienceWordOverlay
                     ShowToast("Đã khoanh vùng! Bấm [Chụp vùng] (Enter) để Copy ảnh, hoặc [Tô vùng] để tô màu!", 4000);
                 InvalidateVisual();
             }
-            _draggingRevHandle = 0;
+            _draggingRevHandle = -1;
+            _isOrbiting3D = false;
             _draggingPointId = null; _draggingTextId = null; _activeStroke = null;
             if (IsMouseCaptured) ReleaseMouseCapture();
         }
@@ -1147,7 +1394,7 @@ namespace ScienceWordOverlay
         protected override void OnRender(DrawingContext dc)
         {
             base.OnRender(dc);
-            if (!IsPassthrough) dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), null, new Rect(0, 0, ActualWidth, ActualHeight));
+            DrawCanvasBackground(dc);
             RenderScene(dc, cleanExport: false);
 
             if (!string.IsNullOrEmpty(_toastMsg))
@@ -1171,6 +1418,9 @@ namespace ScienceWordOverlay
             // 0.4 Khối tròn xoay 3D / Diện tích tích phân [a, b]
             if (RevScene != null && RevScene.IsValid)
                 RenderRevolutionScene(dc, RevScene, cleanExport, dpi);
+
+            // 0.45 Khối 3D tương tác xoay tự do + thiết diện + tách khối
+            if (Solid3D != null) RenderSolid3D(dc, Solid3D, cleanExport, dpi);
 
             // 0.5 Khung nhận diện đối tượng Office (ẩn khi export)
             if (!cleanExport && OfficeContext != null && OfficeContext.ScreenBoundsDip.Width > 2)
@@ -1341,131 +1591,282 @@ namespace ScienceWordOverlay
         }
 
         // ================= RENDER TÔ DIỆN TÍCH 2D & KHỐI TRÒN XOAY 3D =================
+        private bool TryHitRevRegion(Point pos, out int regionIdx)
+        {
+            regionIdx = -1;
+            if (RevScene == null || !RevScene.IsValid) return false;
+            RevScene.EnsureBoundsInitialized();
+            double dx = pos.X - RevScene.AxisOrigin.X, dy = pos.Y - RevScene.AxisOrigin.Y;
+            double t = dx * RevScene.AxisU.X + dy * RevScene.AxisU.Y;
+            double r = dx * RevScene.AxisV.X + dy * RevScene.AxisV.Y;
+            for (int i = 0; i < RevScene.SplitBounds.Count - 1; i++)
+            {
+                if (t >= RevScene.SplitBounds[i] && t <= RevScene.SplitBounds[i + 1])
+                {
+                    double r1 = RevolutionScene.SampleR(RevScene.Curve1TR, t);
+                    double r2 = RevScene.HasTwoCurves ? RevolutionScene.SampleR(RevScene.Curve2TR, t) : 0.0;
+                    if (r >= Math.Min(r1, r2) - 6.0 && r <= Math.Max(r1, r2) + 6.0) { regionIdx = i; return true; }
+                }
+            }
+            return false;
+        }
+
+        private string Next3DLabel()
+        {
+            const string pref = "MNPQEFGHIJK";
+            var used = new HashSet<string>(Solid3D!.Vertices.Select(v => v.Label));
+            foreach (char c in pref) if (!used.Contains(c.ToString())) return c.ToString();
+            return $"P{Solid3D.NextIdx}";
+        }
+
+        private Vertex3D? FindNearest3DVertex(Point pos, double radius)
+        {
+            if (Solid3D == null) return null;
+            Vertex3D? best = null; double bestD = radius;
+            foreach (var v in Solid3D.Vertices)
+            {
+                if (string.IsNullOrEmpty(v.Label)) continue;
+                double d = Dist(pos, Solid3D.Project(Solid3D.GetEffectivePos(v, true), out _));
+                if (d < bestD) { bestD = d; best = v; }
+            }
+            return best;
+        }
+
+        private (Edge3D edge, double t)? FindNearest3DEdge(Point pos, double radius)
+        {
+            if (Solid3D == null) return null;
+            Edge3D? bestE = null; double bestD = radius, bestT = 0.5;
+            foreach (var e in Solid3D.Edges)
+            {
+                var v1 = Solid3D.GetV(e.V1Id); var v2 = Solid3D.GetV(e.V2Id);
+                if (v1 == null || v2 == null) continue;
+                Point a = Solid3D.Project(Solid3D.GetEffectivePos(v1, true), out _);
+                Point b = Solid3D.Project(Solid3D.GetEffectivePos(v2, true), out _);
+                double d = PointToSegmentDist(pos, a, b);
+                if (d < bestD)
+                {
+                    bestD = d; bestE = e;
+                    double vx = b.X - a.X, vy = b.Y - a.Y, den = vx * vx + vy * vy;
+                    bestT = den > 1e-5 ? Math.Clamp(((pos.X - a.X) * vx + (pos.Y - a.Y) * vy) / den, 0.05, 0.95) : 0.5;
+                }
+            }
+            return bestE != null ? (bestE, bestT) : null;
+        }
+
+        private bool TryIntersect2DSegments(GeoShape s1, GeoShape s2, out Point inter)
+        {
+            inter = default;
+            var a = GetPoint(s1.P1Id); var b = GetPoint(s1.P2Id); var c = GetPoint(s2.P1Id); var d = GetPoint(s2.P2Id);
+            if (a == null || b == null || c == null || d == null) return false;
+            double x1 = a.X, y1 = a.Y, x2 = b.X, y2 = b.Y, x3 = c.X, y3 = c.Y, x4 = d.X, y4 = d.Y;
+            double den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.Abs(den) < 1e-6) return false;
+            inter = new Point(((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den,
+                              ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den);
+            return true;
+        }
+
+        private void DrawCanvasBackground(DrawingContext dc)
+        {
+            Rect full = new(0, 0, ActualWidth, ActualHeight);
+            if (CanvasBg == CanvasBackgroundMode.Transparent)
+            {
+                if (!IsPassthrough) dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), null, full);
+                return;
+            }
+            if (CanvasBg == CanvasBackgroundMode.ChalkboardGrid)
+            {
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(27, 73, 58)), null, full);
+                DrawGridLines(dc, 26, Color.FromArgb(55, 167, 243, 208), Color.FromArgb(95, 167, 243, 208));
+            }
+            else if (CanvasBg == CanvasBackgroundMode.WhiteboardPlain) dc.DrawRectangle(Brushes.White, null, full);
+            else if (CanvasBg == CanvasBackgroundMode.WhiteboardGrid)
+            {
+                dc.DrawRectangle(Brushes.White, null, full);
+                DrawGridLines(dc, 26, Color.FromArgb(140, 219, 234, 254), Color.FromArgb(200, 147, 197, 253));
+            }
+            else if (CanvasBg == CanvasBackgroundMode.Blackboard)
+            {
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(17, 24, 39)), null, full);
+                DrawGridLines(dc, 28, Color.FromArgb(40, 148, 163, 184), Color.FromArgb(75, 148, 163, 184));
+            }
+        }
+
+        private void DrawGridLines(DrawingContext dc, double step, Color minorCol, Color majorCol)
+        {
+            var minorPen = new Pen(new SolidColorBrush(minorCol), 0.7);
+            var majorPen = new Pen(new SolidColorBrush(majorCol), 1.1);
+            int idx = 0;
+            for (double x = 0; x <= ActualWidth; x += step, idx++) dc.DrawLine(idx % 5 == 0 ? majorPen : minorPen, new Point(x, 0), new Point(x, ActualHeight));
+            idx = 0;
+            for (double y = 0; y <= ActualHeight; y += step, idx++) dc.DrawLine(idx % 5 == 0 ? majorPen : minorPen, new Point(0, y), new Point(ActualWidth, y));
+        }
+
+        private void RenderSolid3D(DrawingContext dc, Solid3DScene s, bool cleanExport, double dpi)
+        {
+            var proj = new Dictionary<string, (Point pt, double z)>();
+            foreach (var v in s.Vertices) { Point p = s.Project(s.GetEffectivePos(v, true), out double z); proj[v.Id] = (p, z); }
+
+            foreach (var sec in s.Sections)
+            {
+                var pts = sec.VertexIds.Where(id => proj.ContainsKey(id)).Select(id => proj[id].pt).ToList();
+                if (pts.Count < 3) continue;
+                var geo = new StreamGeometry();
+                using (var ctx = geo.Open()) { ctx.BeginFigure(pts[0], true, true); ctx.PolyLineTo(pts.Skip(1).ToList(), true, false); }
+                geo.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(ParseColor(sec.ColorHex, sec.Opacity)), new Pen(new SolidColorBrush(ParseColor(sec.ColorHex, 0.95)), 1.6), geo);
+            }
+
+            string defaultCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard) ? "#F8FAFC" : StrokeColorHex;
+            foreach (var e in s.Edges)
+            {
+                if (!proj.TryGetValue(e.V1Id, out var a) || !proj.TryGetValue(e.V2Id, out var b)) continue;
+                string hex = e.CustomColorHex ?? (e.IsConstruction ? "#FDE047" : defaultCol);
+                dc.DrawLine(MakePen(hex, StrokeWidth, s.IsEdgeHidden(e) ? "dashed" : "solid", false), a.pt, b.pt);
+            }
+
+            var lblTf = new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
+            Color lblCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard) ? Colors.White : Color.FromRgb(15, 23, 42);
+            foreach (var v in s.Vertices)
+            {
+                if (!proj.TryGetValue(v.Id, out var pv) || string.IsNullOrEmpty(v.Label)) continue;
+                bool isPicked = !cleanExport && (_step3DVertices.Contains(v.Id) || _pending3DParallelVertex == v.Id);
+                dc.DrawEllipse(new SolidColorBrush(isPicked ? Color.FromRgb(245, 158, 11) : Color.FromRgb(239, 68, 68)), new Pen(Brushes.White, 1.4), pv.pt, isPicked ? 5.5 : 3.6, isPicked ? 5.5 : 3.6);
+                var ft = new FormattedText(v.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 19, new SolidColorBrush(lblCol), dpi);
+                dc.DrawText(ft, new Point(pv.pt.X + 8, pv.pt.Y - 18));
+            }
+        }
+
         private void RenderRevolutionScene(DrawingContext dc, RevolutionScene s, bool cleanExport, double dpi)
         {
-            double a = Math.Min(s.LimitA, s.LimitB);
-            double b = Math.Max(s.LimitA, s.LimitB);
-            Color baseCol = ParseColor(FillColorHex, 1.0);
+            s.EnsureBoundsInitialized();
+            int regCount = s.SplitBounds.Count - 1;
+            Color volBaseCol = ParseColor(Volume3DColorHex, 1.0);
+            var lblTf = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
 
-            if (b - a >= 1.5)
+            void DrawPlanarSlice(double a, double b, string hexCol, double opacity, bool isSelectedBorder)
             {
-                if (RevMode == MathRenderMode.Area2D)
-                {
-                    int steps = 72;
-                    var poly = new List<Point>(steps * 2 + 2);
-                    for (int i = 0; i <= steps; i++)
-                    {
-                        double t = a + (b - a) * i / steps;
-                        poly.Add(s.ToScreen2D(t, RevolutionScene.SampleR(s.Curve1TR, t)));
-                    }
-                    for (int i = steps; i >= 0; i--)
-                    {
-                        double t = a + (b - a) * i / steps;
-                        double r2 = s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, t) : 0.0;
-                        poly.Add(s.ToScreen2D(t, r2));
-                    }
-                    var geo = new StreamGeometry();
-                    using (var ctx = geo.Open()) { ctx.BeginFigure(poly[0], true, true); ctx.PolyLineTo(poly.Skip(1).ToList(), true, false); }
-                    geo.Freeze();
-                    dc.DrawGeometry(MakeRegionBrush(FillColorHex, FillOpacity, FillPattern), null, geo);
+                if (b - a < 1.5) return;
+                int steps = 64;
+                var poly = new List<Point>(steps * 2 + 2);
+                for (int i = 0; i <= steps; i++) { double t = a + (b - a) * i / steps; poly.Add(s.ToScreen2D(t, RevolutionScene.SampleR(s.Curve1TR, t))); }
+                for (int i = steps; i >= 0; i--) { double t = a + (b - a) * i / steps; poly.Add(s.ToScreen2D(t, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, t) : 0.0)); }
+                var geo = new StreamGeometry();
+                using (var ctx = geo.Open()) { ctx.BeginFigure(poly[0], true, true); ctx.PolyLineTo(poly.Skip(1).ToList(), true, false); }
+                geo.Freeze();
+                Color c = ParseColor(hexCol, 1.0);
+                Pen borderPen = isSelectedBorder ? new Pen(new SolidColorBrush(ShadeColor(c, 0.55, 0.95)), 2.2) : new Pen(new SolidColorBrush(ShadeColor(c, 0.72, 0.75)), 1.2);
+                dc.DrawGeometry(MakeRegionBrush(hexCol, opacity, FillPattern), borderPen, geo);
+                var boundPen = new Pen(new SolidColorBrush(ShadeColor(c, 0.65, Math.Min(1.0, opacity + 0.35))), 1.5) { DashStyle = DashStyles.Dash };
+                dc.DrawLine(boundPen, s.ToScreen2D(a, RevolutionScene.SampleR(s.Curve1TR, a)), s.ToScreen2D(a, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, a) : 0));
+                dc.DrawLine(boundPen, s.ToScreen2D(b, RevolutionScene.SampleR(s.Curve1TR, b)), s.ToScreen2D(b, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, b) : 0));
+            }
 
-                    var boundPen = new Pen(new SolidColorBrush(ShadeColor(baseCol, 0.7, Math.Min(1.0, FillOpacity + 0.35))), 1.5) { DashStyle = DashStyles.Dash };
-                    dc.DrawLine(boundPen, s.ToScreen2D(a, RevolutionScene.SampleR(s.Curve1TR, a)), s.ToScreen2D(a, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, a) : 0));
-                    dc.DrawLine(boundPen, s.ToScreen2D(b, RevolutionScene.SampleR(s.Curve1TR, b)), s.ToScreen2D(b, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, b) : 0));
-                }
-                else if (RevSweepDeg >= 1.0)
+            if (RevMode == MathRenderMode.Area2D)
+            {
+                for (int k = 0; k < regCount; k++)
                 {
-                    int nT = 48;
+                    if (!s.RegionEnabled[k]) continue;
+                    double a = s.SplitBounds[k], b = s.SplitBounds[k + 1];
+                    DrawPlanarSlice(a, b, s.RegionColors[k], FillOpacity, !cleanExport && regCount > 1 && k == s.ActiveRegionIndex);
+                    if (regCount > 1 && b - a >= 18.0)
+                    {
+                        double tMid = 0.5 * (a + b), rMid = 0.5 * (RevolutionScene.SampleR(s.Curve1TR, tMid) + (s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, tMid) : 0.0));
+                        Point cPt = s.ToScreen2D(tMid, rMid);
+                        var ft = new FormattedText($"S{k + 1}", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 13, new SolidColorBrush(Color.FromRgb(15, 23, 42)), dpi);
+                        dc.DrawText(ft, new Point(cPt.X - ft.Width / 2, cPt.Y - ft.Height / 2));
+                    }
+                }
+            }
+            else
+            {
+                if (RevSweepDeg >= 1.0)
+                {
                     int nAng = Math.Max(8, (int)Math.Ceiling(RevSweepDeg / 8.0));
                     double maxRad = RevSweepDeg * Math.PI / 180.0;
+                    var quads = new List<(Point[] pts, double depth, Color col)>();
+                    var rings = new List<Point[]>();
 
-                    double[] ts = new double[nT + 1];
-                    double[] rs = new double[nT + 1];
-                    for (int i = 0; i <= nT; i++) { ts[i] = a + (b - a) * i / nT; rs[i] = RevolutionScene.SampleR(s.Curve1TR, ts[i]); }
-
-                    var grid = new Point[nT + 1, nAng + 1];
-                    for (int i = 0; i <= nT; i++)
-                        for (int j = 0; j <= nAng; j++)
-                            grid[i, j] = s.Project3D(ts[i], rs[i], maxRad * j / nAng, RevXCompression);
-
-                    var quads = new List<(Point[] pts, double depth, Color col)>(nT * nAng + nAng * 2);
-                    for (int i = 0; i < nT; i++)
+                    for (int k = 0; k < regCount; k++)
                     {
-                        double rAvg = 0.5 * (rs[i] + rs[i + 1]);
-                        double dt = ts[i + 1] - ts[i], dr = rs[i + 1] - rs[i];
-                        double sl = Hypot(dt, dr);
-                        double slopeN = sl > 1e-4 ? -dr / sl : 0;
-                        double signR = rAvg >= 0 ? 1.0 : -1.0;
+                        if (!s.RegionEnabled[k]) continue;
+                        double a = s.SplitBounds[k], b = s.SplitBounds[k + 1];
+                        if (b - a < 1.5) continue;
+                        int nT = Math.Max(20, (int)Math.Ceiling(48.0 * (b - a) / Math.Max(1.0, s.TMax - s.TMin)));
+                        double[] ts = new double[nT + 1], rs = new double[nT + 1];
+                        for (int i = 0; i <= nT; i++) { ts[i] = a + (b - a) * i / nT; rs[i] = RevolutionScene.SampleR(s.Curve1TR, ts[i]); }
+                        var grid = new Point[nT + 1, nAng + 1];
+                        for (int i = 0; i <= nT; i++) for (int j = 0; j <= nAng; j++) grid[i, j] = s.Project3D(ts[i], rs[i], maxRad * j / nAng, RevXCompression);
 
-                        for (int j = 0; j < nAng; j++)
+                        for (int i = 0; i < nT; i++)
                         {
-                            double thMid = maxRad * (j + 0.5) / nAng;
-                            double depth = 0.5 * (s.ComputeDepth(ts[i], rs[i], thMid) + s.ComputeDepth(ts[i + 1], rs[i + 1], thMid));
-                            double nx = slopeN * 0.4, ny = Math.Cos(thMid) * signR, nz = Math.Sin(thMid) * signR;
-                            double nLen = Math.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 1e-5) { nx /= nLen; ny /= nLen; nz /= nLen; }
-                            double sxN = nx * s.AxisU.X + ny * s.AxisV.X, syN = nx * s.AxisU.Y + ny * s.AxisV.Y;
-                            double light = Math.Clamp(0.54 + 0.48 * Math.Max(-0.35, sxN * -0.25 + syN * -0.55 + nz * 0.78), 0.30, 1.25);
-
-                            quads.Add((new[] { grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1] }, depth, ShadeColor(baseCol, light, Math.Max(0.45, FillOpacity + 0.25))));
-                        }
-                    }
-
-                    if (RevShowCaps)
-                    {
-                        void AddCap(double tEnd, double rEnd, double sideSign)
-                        {
-                            if (Math.Abs(rEnd) < 1.0) return;
-                            Point center = s.ToScreen2D(tEnd, 0);
-                            Color capCol = ShadeColor(baseCol, sideSign > 0 ? 0.92 : 0.72, Math.Min(0.95, FillOpacity + 0.35));
+                            double rAvg = 0.5 * (rs[i] + rs[i + 1]), dt = ts[i + 1] - ts[i], dr = rs[i + 1] - rs[i], sl = Hypot(dt, dr);
+                            double slopeN = sl > 1e-4 ? -dr / sl : 0, signR = rAvg >= 0 ? 1.0 : -1.0;
                             for (int j = 0; j < nAng; j++)
                             {
-                                double th0 = maxRad * j / nAng, th1 = maxRad * (j + 1) / nAng;
-                                quads.Add((new[] { center, s.Project3D(tEnd, rEnd, th0, RevXCompression), s.Project3D(tEnd, rEnd, th1, RevXCompression) },
-                                    s.ComputeDepth(tEnd, rEnd * 0.55, 0.5 * (th0 + th1)) + sideSign * 0.03, capCol));
+                                double thMid = maxRad * (j + 0.5) / nAng;
+                                double depth = 0.5 * (s.ComputeDepth(ts[i], rs[i], thMid) + s.ComputeDepth(ts[i + 1], rs[i + 1], thMid));
+                                double nx = slopeN * 0.4, ny = Math.Cos(thMid) * signR, nz = Math.Sin(thMid) * signR;
+                                double nLen = Math.Sqrt(nx * nx + ny * ny + nz * nz); if (nLen > 1e-5) { nx /= nLen; ny /= nLen; nz /= nLen; }
+                                double sxN = nx * s.AxisU.X + ny * s.AxisV.X, syN = nx * s.AxisU.Y + ny * s.AxisV.Y;
+                                double light = Math.Clamp(0.54 + 0.48 * Math.Max(-0.35, sxN * -0.25 + syN * -0.55 + nz * 0.78), 0.30, 1.25);
+                                quads.Add((new[] { grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1] }, depth, ShadeColor(volBaseCol, light, Math.Max(0.42, FillOpacity + 0.22))));
                             }
                         }
-                        AddCap(ts[0], rs[0], -1);
-                        AddCap(ts[nT], rs[nT], 1);
+                        if (RevShowCaps)
+                        {
+                            void AddCap(double tEnd, double rEnd, double sideSign)
+                            {
+                                if (Math.Abs(rEnd) < 1.0) return;
+                                Point center = s.ToScreen2D(tEnd, 0);
+                                Color capCol = ShadeColor(volBaseCol, sideSign > 0 ? 0.92 : 0.72, Math.Min(0.92, FillOpacity + 0.32));
+                                for (int j = 0; j < nAng; j++)
+                                {
+                                    double th0 = maxRad * j / nAng, th1 = maxRad * (j + 1) / nAng;
+                                    quads.Add((new[] { center, s.Project3D(tEnd, rEnd, th0, RevXCompression), s.Project3D(tEnd, rEnd, th1, RevXCompression) }, s.ComputeDepth(tEnd, rEnd * 0.55, 0.5 * (th0 + th1)) + sideSign * 0.03, capCol));
+                                }
+                            }
+                            AddCap(ts[0], rs[0], -1); AddCap(ts[nT], rs[nT], 1);
+                        }
+                        Point[] r0 = new Point[nAng + 1], rN = new Point[nAng + 1];
+                        for (int j = 0; j <= nAng; j++) { r0[j] = grid[0, j]; rN[j] = grid[nT, j]; }
+                        rings.Add(r0); rings.Add(rN);
                     }
-
                     quads.Sort((x, y) => x.depth.CompareTo(y.depth));
                     foreach (var q in quads)
                     {
                         var geo = new StreamGeometry();
                         using (var ctx = geo.Open()) { ctx.BeginFigure(q.pts[0], true, true); ctx.PolyLineTo(q.pts.Skip(1).ToList(), false, false); }
-                        geo.Freeze();
-                        dc.DrawGeometry(new SolidColorBrush(q.col), null, geo);
+                        geo.Freeze(); dc.DrawGeometry(new SolidColorBrush(q.col), null, geo);
                     }
-
-                    // Vẽ viền 2 miệng đầu mút
-                    var rimPen = new Pen(new SolidColorBrush(ShadeColor(baseCol, 0.55, 0.85)), 1.4);
-                    void DrawRing(int idx)
+                    var rimPen = new Pen(new SolidColorBrush(ShadeColor(volBaseCol, 0.55, 0.85)), 1.4);
+                    foreach (var ring in rings)
                     {
                         var gRing = new StreamGeometry();
-                        using (var ctx = gRing.Open()) { ctx.BeginFigure(grid[idx, 0], false, false); for (int j = 1; j <= nAng; j++) ctx.LineTo(grid[idx, j], true, false); }
+                        using (var ctx = gRing.Open()) { ctx.BeginFigure(ring[0], false, false); for (int j = 1; j < ring.Length; j++) ctx.LineTo(ring[j], true, false); }
                         gRing.Freeze(); dc.DrawGeometry(null, rimPen, gRing);
                     }
-                    DrawRing(0); DrawRing(nT);
+                }
+                if (RevShowAreaIn3D || RevSweepDeg < 1.0)
+                {
+                    for (int k = 0; k < regCount; k++)
+                        if (s.RegionEnabled[k]) DrawPlanarSlice(s.SplitBounds[k], s.SplitBounds[k + 1], Area2DColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false);
                 }
             }
 
-            // Vẽ 2 chốt kéo cận [a], [b] màu đỏ trên trục (chỉ hiện khi không export)
             if (!cleanExport)
             {
-                Point hA = s.ToScreen2D(s.LimitA, 0), hB = s.ToScreen2D(s.LimitB, 0);
-                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(180, 239, 68, 68)), 2.0) { DashStyle = DashStyles.Dot }, hA, hB);
-                var tf = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
-                void DrawHandle(Point pt, string lbl)
+                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(180, 239, 68, 68)), 2.0) { DashStyle = DashStyles.Dot }, s.ToScreen2D(s.SplitBounds[0], 0), s.ToScreen2D(s.SplitBounds[^1], 0));
+                for (int i = 0; i < s.SplitBounds.Count; i++)
                 {
-                    dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(220, 38, 38)), new Pen(Brushes.White, 2.0), pt, 9.5, 9.5);
-                    var ft = new FormattedText(lbl, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, 11.5, Brushes.White, dpi);
+                    Point pt = s.ToScreen2D(s.SplitBounds[i], 0);
+                    bool isInterior = i > 0 && i < s.SplitBounds.Count - 1;
+                    dc.DrawEllipse(new SolidColorBrush(isInterior ? Color.FromRgb(234, 88, 12) : Color.FromRgb(220, 38, 38)), new Pen(Brushes.White, 2.0), pt, 9.5, 9.5);
+                    var ft = new FormattedText(RevolutionScene.GetBoundLabel(i), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 11.5, Brushes.White, dpi);
                     dc.DrawText(ft, new Point(pt.X - ft.Width / 2, pt.Y - ft.Height / 2));
                 }
-                DrawHandle(hA, "a"); DrawHandle(hB, "b");
             }
         }
-
         private void DrawIdleVirtualToolAtCursor(DrawingContext dc, double dpi)
         {
             if (Tool is "select" or "snip_rect" or "snip_lasso" or "magic_wand" or "text") return;
@@ -1526,11 +1927,7 @@ namespace ScienceWordOverlay
             if (Tool is "segment" or "dashed" or "vector")
             {
                 dc.DrawLine(prevPen, pt1, pt2);
-                if (ShowVirtualTools)
-                {
-                    DrawVirtualRuler(dc, pt1, pt2, dpi);
-                    DrawVirtualPen(dc, pt2, penCol, Tool == "dashed" ? "dash" : PenTipStyle, true);
-                }
+                if (ShowVirtualTools) { DrawVirtualRuler(dc, pt1, pt2, dpi); DrawVirtualPen(dc, pt2, penCol, Tool == "dashed" ? "dash" : PenTipStyle, true); }
             }
             else if (Tool == "circle")
             {
@@ -1539,48 +1936,37 @@ namespace ScienceWordOverlay
             }
             else if (Tool == "rect")
             {
-                var r = new Rect(pt1, pt2);
-                dc.DrawRectangle(null, prevPen, r);
-                if (ShowVirtualTools)
-                {
-                    // Hiện Êke góc vuông bám tại góc đối diện + Bút vẽ ở đầu chuột
-                    double ekeW = Math.Clamp(r.Width, 90, 220);
-                    double ekeH = Math.Clamp(r.Height, 65, 150);
-                    DrawVirtualSetSquare(dc, new Point(r.Left, r.Bottom), 0.0, ekeW, ekeH, dpi);
-                    DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
-                }
+                var r = new Rect(pt1, pt2); dc.DrawRectangle(null, prevPen, r);
+                if (ShowVirtualTools) { DrawVirtualSetSquare(dc, new Point(r.Left, r.Bottom), 0.0, Math.Clamp(r.Width, 90, 220), Math.Clamp(r.Height, 65, 150), dpi); DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true); }
             }
             else if (Tool is "triangle" or "fill_area")
             {
                 var pts = _stepPoints.Select(GetPoint).Where(p => p != null).Select(p => new Point(p!.X, p.Y)).ToList();
-                Point lastAnchor = pts[^1];
-                pts.Add(pt2);
+                Point lastAnchor = pts[^1]; pts.Add(pt2);
                 var geo = new StreamGeometry();
                 using (var ctx = geo.Open()) { ctx.BeginFigure(pts[0], Tool == "fill_area", Tool == "fill_area"); ctx.PolyLineTo(pts.Skip(1).ToList(), true, false); }
                 geo.Freeze();
                 dc.DrawGeometry((Tool == "fill_area" && pts.Count >= 3) ? MakeRegionBrush(FillColorHex, FillOpacity, FillPattern) : null, prevPen, geo);
-
-                if (ShowVirtualTools)
-                {
-                    DrawVirtualRuler(dc, lastAnchor, pt2, dpi);
-                    DrawVirtualPen(dc, pt2, Tool == "fill_area" ? ParseColor(FillColorHex, 1.0) : penCol, PenTipStyle, true);
-                }
+                if (ShowVirtualTools) { DrawVirtualRuler(dc, lastAnchor, pt2, dpi); DrawVirtualPen(dc, pt2, Tool == "fill_area" ? ParseColor(FillColorHex, 1.0) : penCol, PenTipStyle, true); }
             }
             else if (Tool == "altitude")
             {
-                // Đã chọn đỉnh, đang rê tìm cạnh đáy -> hiện Êke vuông góc + Bút vẽ
                 var sh = FindNearestSegment(pt2, 22.0);
                 if (sh != null)
                 {
                     var s1 = GetPoint(sh.P1Id); var s2 = GetPoint(sh.P2Id);
                     if (s1 != null && s2 != null)
                     {
-                        Point foot = ProjectPointOnLine(pt1, new Point(s1.X, s1.Y), new Point(s2.X, s2.Y));
+                        Point sp1 = new(s1.X, s1.Y), sp2 = new(s2.X, s2.Y);
+                        Point foot = ProjectPointOnLine(pt1, sp1, sp2);
                         dc.DrawLine(prevPen, pt1, foot);
                         if (ShowVirtualTools)
                         {
-                            double ang = Math.Atan2(s2.Y - s1.Y, s2.X - s1.X) * 180.0 / Math.PI;
-                            DrawVirtualSetSquare(dc, foot, ang, 150.0, Math.Clamp(Dist(pt1, foot), 75.0, 175.0), dpi);
+                            Vector eBase = Dist(foot, sp2) >= Dist(foot, sp1) ? (sp2 - foot) : (sp1 - foot);
+                            if (eBase.Length < 1e-4) eBase = sp2 - sp1;
+                            Vector eVert = pt1 - foot;
+                            if (eVert.Length < 1e-4) eVert = new Vector(-eBase.Y, eBase.X);
+                            DrawVirtualSetSquareByAxes(dc, foot, eBase, eVert, 145.0, Math.Clamp(Dist(pt1, foot), 75.0, 185.0));
                             DrawVirtualPen(dc, foot, penCol, PenTipStyle, true);
                         }
                         return;
@@ -1589,7 +1975,9 @@ namespace ScienceWordOverlay
                 dc.DrawLine(prevPen, pt1, pt2);
                 if (ShowVirtualTools)
                 {
-                    DrawVirtualSetSquare(dc, pt2, 0.0, 130.0, 85.0, dpi);
+                    Vector vDir = pt1 - pt2;
+                    if (vDir.Length > 4) { Vector bDir = new(vDir.Y, -vDir.X); if (bDir.X < 0) bDir = -bDir; DrawVirtualSetSquareByAxes(dc, pt2, bDir, vDir, 130.0, 85.0); }
+                    else DrawVirtualSetSquare(dc, pt2, 0.0, 130.0, 85.0, dpi);
                     DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
                 }
             }
@@ -1598,11 +1986,7 @@ namespace ScienceWordOverlay
                 if (_stepPoints.Count == 1)
                 {
                     dc.DrawLine(prevPen, pt1, pt2);
-                    if (ShowVirtualTools)
-                    {
-                        DrawVirtualRuler(dc, pt1, pt2, dpi);
-                        DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
-                    }
+                    if (ShowVirtualTools) { DrawVirtualRuler(dc, pt1, pt2, dpi); DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true); }
                 }
                 else if (_stepPoints.Count == 2)
                 {
@@ -1610,15 +1994,16 @@ namespace ScienceWordOverlay
                     if (pv != null)
                     {
                         Point vPt = new(pv.X, pv.Y);
-                        dc.DrawLine(prevPen, pt1, vPt);
-                        dc.DrawLine(prevPen, vPt, pt2);
+                        dc.DrawLine(prevPen, pt1, vPt); dc.DrawLine(prevPen, vPt, pt2);
                         if (ShowVirtualTools)
                         {
-                            double baseAng = Math.Atan2(pt1.Y - vPt.Y, pt1.X - vPt.X) * 180.0 / Math.PI;
                             if (Tool == "right_angle")
-                                DrawVirtualSetSquare(dc, vPt, baseAng, 130.0, 90.0, dpi);
-                            else
-                                DrawVirtualProtractor(dc, vPt, baseAng, 95.0, dpi);
+                            {
+                                Vector eBase = pt1 - vPt, eVert = new(-eBase.Y, eBase.X);
+                                if (eVert.X * (pt2.X - vPt.X) + eVert.Y * (pt2.Y - vPt.Y) < 0) eVert = -eVert;
+                                DrawVirtualSetSquareByAxes(dc, vPt, eBase, eVert, 130.0, 90.0);
+                            }
+                            else DrawVirtualProtractor(dc, vPt, Math.Atan2(pt1.Y - vPt.Y, pt1.X - vPt.X) * 180.0 / Math.PI, 95.0, dpi);
                             DrawVirtualPen(dc, pt2, Tool == "fill_angle" ? ParseColor(FillColorHex, 1.0) : penCol, PenTipStyle, true);
                         }
                     }
@@ -1626,50 +2011,36 @@ namespace ScienceWordOverlay
             }
         }
 
-        private static void DrawVirtualSetSquare(DrawingContext dc, Point origin, double angleDeg, double w, double h, double dpi)
+        private static void DrawVirtualSetSquareByAxes(DrawingContext dc, Point origin, Vector eBase, Vector eVert, double w, double h)
         {
-            dc.PushTransform(new TranslateTransform(origin.X, origin.Y));
-            dc.PushTransform(new RotateTransform(angleDeg));
+            if (eBase.Length < 1e-4 || eVert.Length < 1e-4) return;
+            eBase.Normalize(); eVert.Normalize();
+            Point Map(double lx, double ly) => new(origin.X + lx * eBase.X + ly * eVert.X, origin.Y + lx * eBase.Y + ly * eVert.Y);
 
             var outer = new StreamGeometry();
-            using (var ctx = outer.Open())
-            {
-                ctx.BeginFigure(new Point(0, 0), true, true);
-                ctx.PolyLineTo(new[] { new Point(w, 0), new Point(0, -h) }, true, false);
-            }
+            using (var ctx = outer.Open()) { ctx.BeginFigure(Map(0, 0), true, true); ctx.PolyLineTo(new[] { Map(w, 0), Map(0, h) }, true, false); }
             outer.Freeze();
+            dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(145, 191, 219, 254)), new Pen(new SolidColorBrush(Color.FromArgb(225, 30, 64, 175)), 1.8), outer);
 
-            dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(145, 191, 219, 254)),
-                new Pen(new SolidColorBrush(Color.FromArgb(225, 30, 64, 175)), 1.8), outer);
-
-            // Tam giác rỗng bên trong Êke
             if (w > 85 && h > 55)
             {
                 var inner = new StreamGeometry();
-                using (var ctx = inner.Open())
-                {
-                    ctx.BeginFigure(new Point(22, -16), true, true);
-                    ctx.PolyLineTo(new[] { new Point(w - 44, -16), new Point(22, -(h - 34)) }, true, false);
-                }
+                using (var ctx = inner.Open()) { ctx.BeginFigure(Map(22, 16), true, true); ctx.PolyLineTo(new[] { Map(w - 44, 16), Map(22, h - 34) }, true, false); }
                 inner.Freeze();
-                dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(110, 255, 255, 255)),
-                    new Pen(new SolidColorBrush(Color.FromArgb(190, 30, 64, 175)), 1.2), inner);
+                dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(110, 255, 255, 255)), new Pen(new SolidColorBrush(Color.FromArgb(190, 30, 64, 175)), 1.2), inner);
             }
-
-            // Ký hiệu góc vuông 90° màu đỏ trên Êke
             var sqPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 220, 38, 38)), 1.6);
-            dc.DrawLine(sqPen, new Point(12, 0), new Point(12, -12));
-            dc.DrawLine(sqPen, new Point(12, -12), new Point(0, -12));
-
-            // Vạch chia cm trên 2 cạnh góc vuông
+            dc.DrawLine(sqPen, Map(12, 0), Map(12, 12)); dc.DrawLine(sqPen, Map(12, 12), Map(0, 12));
             var tickPen = new Pen(new SolidColorBrush(Color.FromArgb(200, 30, 58, 138)), 0.9);
-            for (double x = 8; x < w - 10; x += 8) dc.DrawLine(tickPen, new Point(x, 0), new Point(x, x % 16 == 0 ? -8 : -5));
-            for (double y = 8; y < h - 10; y += 8) dc.DrawLine(tickPen, new Point(0, -y), new Point(y % 16 == 0 ? 8 : 5, -y));
-
-            dc.Pop();
-            dc.Pop();
+            for (double x = 8; x < w - 10; x += 8) dc.DrawLine(tickPen, Map(x, 0), Map(x, x % 16 == 0 ? 8 : 5));
+            for (double y = 8; y < h - 10; y += 8) dc.DrawLine(tickPen, Map(0, y), Map(y % 16 == 0 ? 8 : 5, y));
         }
 
+        private static void DrawVirtualSetSquare(DrawingContext dc, Point origin, double angleDeg, double w, double h, double dpi)
+        {
+            double rad = angleDeg * Math.PI / 180.0;
+            DrawVirtualSetSquareByAxes(dc, origin, new Vector(Math.Cos(rad), Math.Sin(rad)), new Vector(Math.Sin(rad), -Math.Cos(rad)), w, h);
+        }
         private static void DrawVirtualProtractor(DrawingContext dc, Point center, double angleDeg, double radius, double dpi)
         {
             dc.PushTransform(new TranslateTransform(center.X, center.Y));
@@ -1765,10 +2136,12 @@ namespace ScienceWordOverlay
         {
             double len = Dist(a, b);
             if (len < 15) return;
-            double angle = Math.Atan2(b.Y - a.Y, b.X - a.X) * 180.0 / Math.PI;
+            bool reverse = (b.X < a.X - 0.5) || (Math.Abs(b.X - a.X) <= 0.5 && b.Y < a.Y);
+            Point p0 = reverse ? b : a, p1 = reverse ? a : b;
+            double angle = Math.Atan2(p1.Y - p0.Y, p1.X - p0.X) * 180.0 / Math.PI;
             double rulerLen = Math.Max(len + 45, 230), rulerH = 34;
 
-            dc.PushTransform(new TranslateTransform(a.X, a.Y));
+            dc.PushTransform(new TranslateTransform(p0.X, p0.Y));
             dc.PushTransform(new RotateTransform(angle));
             var grad = new LinearGradientBrush(Color.FromArgb(215, 254, 243, 199), Color.FromArgb(180, 251, 191, 36), 90);
             dc.DrawRoundedRectangle(grad, new Pen(new SolidColorBrush(Color.FromArgb(215, 180, 83, 9)), 1.3), new Rect(-15, 2, rulerLen, rulerH), 4, 4);
@@ -1786,7 +2159,6 @@ namespace ScienceWordOverlay
             dc.DrawText(new FormattedText($"{len / cmPx:0.0} cm", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, numTypeface, 12, new SolidColorBrush(Color.FromRgb(30, 58, 138)), dpi), new Point(len / 2 - 20, -20));
             dc.Pop(); dc.Pop();
         }
-
         private static void DrawVirtualCompass(DrawingContext dc, Point center, Point tip, double dpi, bool isIdle = false)
         {
             double r = Dist(center, tip);
@@ -1847,6 +2219,14 @@ namespace ScienceWordOverlay
                             xs.Add(p.X); ys.Add(p.Y);
                         }
                     }
+                }
+            }
+            if (Solid3D != null)
+            {
+                foreach (var v in Solid3D.Vertices)
+                {
+                    Point p = Solid3D.Project(Solid3D.GetEffectivePos(v, true), out _);
+                    xs.Add(p.X - 10); xs.Add(p.X + 28); ys.Add(p.Y - 24); ys.Add(p.Y + 14);
                 }
             }
             foreach (var mf in MagicFills) { xs.Add(mf.BoundsDip.Left); xs.Add(mf.BoundsDip.Right); ys.Add(mf.BoundsDip.Top); ys.Add(mf.BoundsDip.Bottom); }
