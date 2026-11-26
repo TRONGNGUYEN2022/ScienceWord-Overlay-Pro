@@ -18,6 +18,9 @@ namespace ScienceWordOverlay
         private readonly DispatcherTimer _appPollTimer;
         private readonly DispatcherTimer _revAnimTimer;
         private bool _isAnimatingRev = false;
+        private readonly OfficeDoubleClickHook _dblClickHook = new();
+        private readonly DispatcherTimer _dblClickDelayTimer;
+        private string _pendingDblClickProc = "";
 
         public ToolbarWindow(OverlayWindow overlay)
         {
@@ -33,6 +36,23 @@ namespace ScienceWordOverlay
 
             _revAnimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
             _revAnimTimer.Tick += OnRevAnimTick;
+
+            _dblClickDelayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(130) };
+            _dblClickDelayTimer.Tick += (_, _) =>
+            {
+                _dblClickDelayTimer.Stop();
+                if (_overlay.Surface.TryRestoreFromOfficeDoubleClick(_pendingDblClickProc))
+                {
+                    if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
+                }
+            };
+            _dblClickHook.OfficeDoubleClicked += proc =>
+            {
+                if (BtnPassthrough.IsChecked != true) return;
+                _pendingDblClickProc = proc;
+                Dispatcher.BeginInvoke(() => { _dblClickDelayTimer.Stop(); _dblClickDelayTimer.Start(); });
+            };
+            _dblClickHook.Install();
         }
 
         private void OnPollForegroundApp(object? sender, EventArgs e)
@@ -238,6 +258,8 @@ namespace ScienceWordOverlay
         {
             _appPollTimer.Stop();
             _revAnimTimer.Stop();
+            _dblClickDelayTimer.Stop();
+            _dblClickHook.Dispose();
             Application.Current.Shutdown();
         }
     }

@@ -63,6 +63,15 @@ namespace ScienceWordOverlay
         private string? _draggingTextId;
         private string? _selectedPointId;
         private string? _selectedShapeId;
+        // Chọn & Di chuyển toàn bộ nhóm đối tượng (Marquee / HCN / Tự do Lasso)
+        private readonly HashSet<string> _selPointIds = new();
+        private readonly HashSet<string> _selStrokeIds = new();
+        private readonly HashSet<string> _selTextIds = new();
+        private readonly HashSet<string> _selMagicIds = new();
+        private bool _isDraggingGroup = false;
+        private Point _groupLastPos;
+        private Rect? _marqueeRect;
+        private Point _marqueeStart;
 
         private string _toastMsg = "";
         private readonly DispatcherTimer _toastTimer;
@@ -150,8 +159,111 @@ namespace ScienceWordOverlay
             ShowToast("Đã xóa trắng toàn bộ lớp vẽ trong suốt");
         }
 
+
+        public bool TryRestoreFromOfficeDoubleClick(string procName)
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var restored = OfficeComBridge.TryReadSelectedOverlayImage(procName, dpi.DpiScaleX, dpi.DpiScaleY);
+            if (restored == null) return false;
+
+            SaveHistory();
+            Scene = restored.Value.scene;
+            OfficeContext = restored.Value.ctx;
+            ClearGroupSelection();
+            InvalidateVisual();
+            ShowToast("Đã mở lại hình để sửa / vẽ thêm! Sửa xong bấm [Chèn App] để cập nhật đè vào file.", 4500);
+            return true;
+        }
+
+        private void ClearGroupSelection()
+        {
+            _selPointIds.Clear(); _selStrokeIds.Clear(); _selTextIds.Clear(); _selMagicIds.Clear();
+            _isDraggingGroup = false;
+            _marqueeRect = null;
+        }
+
+        private bool HasGroupSelection() =>
+            _selPointIds.Count > 0 || _selStrokeIds.Count > 0 || _selTextIds.Count > 0 || _selMagicIds.Count > 0;
+
+        private Rect? GetGroupSelectionBounds()
+        {
+            var xs = new List<double>(); var ys = new List<double>();
+            foreach (var pid in _selPointIds) { var p = GetPoint(pid); if (p != null) { xs.Add(p.X); ys.Add(p.Y); } }
+            foreach (var sid in _selStrokeIds)
+            {
+                var st = Scene.Strokes.FirstOrDefault(x => x.Id == sid);
+                if (st != null) foreach (var pt in st.Points) { xs.Add(pt[0]); ys.Add(pt[1]); }
+            }
+            foreach (var tid in _selTextIds)
+            {
+                var t = Scene.Texts.FirstOrDefault(x => x.Id == tid);
+                if (t != null) { xs.Add(t.X); xs.Add(t.X + Math.Max(20, t.Text.Length * 11)); ys.Add(t.Y - 16); ys.Add(t.Y + 16); }
+            }
+            foreach (var mid in _selMagicIds)
+            {
+                var mf = MagicFills.FirstOrDefault(x => x.Id == mid);
+                if (mf != null) { xs.Add(mf.BoundsDip.Left); xs.Add(mf.BoundsDip.Right); ys.Add(mf.BoundsDip.Top); ys.Add(mf.BoundsDip.Bottom); }
+            }
+            if (xs.Count == 0) return null;
+            return new Rect(xs.Min() - 8, ys.Min() - 8, Math.Max(16, xs.Max() - xs.Min() + 16), Math.Max(16, ys.Max() - ys.Min() + 16));
+        }
+
+        private static bool PointInPolygon(Point pt, List<Point> poly)
+        {
+            if (poly.Count < 3) return false;
+            bool inside = false;
+            for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+            {
+                if (((poly[i].Y > pt.Y) != (poly[j].Y > pt.Y)) &&
+                    (pt.X < (poly[j].X - poly[i].X) * (pt.Y - poly[i].Y) / (poly[j].Y - poly[i].Y + 1e-9) + poly[i].X))
+                    inside = !inside;
+            }
+            return inside;
+        }
+
+        private void SelectObjectsInPredicate(Func<Point, bool> inside)
+        {
+            ClearGroupSelection();
+            foreach (var p in Scene.Points) if (inside(new Point(p.X, p.Y))) _selPointIds.Add(p.Id);
+            foreach (var st in Scene.Strokes) if (st.Points.Any(pt => inside(new Point(pt[0], pt[1])))) _selStrokeIds.Add(st.Id);
+            foreach (var t in Scene.Texts) if (inside(new Point(t.X, t.Y))) _selTextIds.Add(t.Id);
+            foreach (var mf in MagicFills)
+            {
+                Point c = new(mf.BoundsDip.Left + mf.BoundsDip.Width * 0.5, mf.BoundsDip.Top + mf.BoundsDip.Height * 0.5);
+                if (inside(c)) _selMagicIds.Add(mf.Id);
+            }
+            int total = _selPointIds.Count + _selStrokeIds.Count + _selTextIds.Count + _selMagicIds.Count;
+            if (total > 0)
+                ShowToast($"Đã chọn {total} đối tượng! Kéo bên trong khung xanh để di chuyển toàn bộ, hoặc nhấn Delete để xóa.", 3800);
+        }
+
+        private void MoveSelectedGroupBy(double dx, double dy)
+        {
+            foreach (var pid in _selPointIds) { var p = GetPoint(pid); if (p != null) { p.X += dx; p.Y += dy; } }
+            foreach (var sid in _selStrokeIds)
+            {
+                var st = Scene.Strokes.FirstOrDefault(x => x.Id == sid);
+                if (st != null) for (int i = 0; i < st.Points.Count; i++) { st.Points[i][0] += dx; st.Points[i][1] += dy; }
+            }
+            foreach (var tid in _selTextIds)
+            {
+                var t = Scene.Texts.FirstOrDefault(x => x.Id == tid);
+                if (t != null) { t.X += dx; t.Y += dy; }
+            }
+            foreach (var mid in _selMagicIds)
+            {
+                var mf = MagicFills.FirstOrDefault(x => x.Id == mid);
+                if (mf != null) mf.BoundsDip = new Rect(mf.BoundsDip.X + dx, mf.BoundsDip.Y + dy, mf.BoundsDip.Width, mf.BoundsDip.Height);
+            }
+            if (ActiveSnipRect.HasValue)
+                ActiveSnipRect = new Rect(ActiveSnipRect.Value.X + dx, ActiveSnipRect.Value.Y + dy, ActiveSnipRect.Value.Width, ActiveSnipRect.Value.Height);
+            for (int i = 0; i < ActiveSnipLasso.Count; i++)
+                ActiveSnipLasso[i] = new Point(ActiveSnipLasso[i].X + dx, ActiveSnipLasso[i].Y + dy);
+        }
+
         private void ClearActiveSteps()
         {
+            ClearGroupSelection();
             _stepPoints.Clear();
             _activeStroke = null;
             _draggingPointId = null;
@@ -348,7 +460,7 @@ namespace ScienceWordOverlay
                 encoder.Frames.Add(BitmapFrame.Create(bmp));
                 using (var fs = File.Create(tempPath)) encoder.Save(fs);
 
-                if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, out _))
+                if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, Scene, out _))
                 {
                     ShowToast($"Đã chèn khớp tọa độ vào {Win32Helper.FriendlyAppName(LastTargetProcName)}!");
                     return;
@@ -509,9 +621,24 @@ namespace ScienceWordOverlay
                 if (dB <= 16.0) { _draggingRevHandle = 2; CaptureMouse(); return; }
             }
 
-            // 1. Snipping Tool: Chọn HCN & Chọn Tự Do (Lasso)
+            // 0.5 Nếu đang có nhóm đối tượng được chọn và click vào bên trong khung nhóm -> Kéo di chuyển TOÀN BỘ nhóm!
+            if (Tool is "select" or "snip_rect" or "snip_lasso" && HasGroupSelection())
+            {
+                var grpBox = GetGroupSelectionBounds();
+                if (grpBox.HasValue && grpBox.Value.Contains(pos))
+                {
+                    SaveHistory();
+                    _isDraggingGroup = true;
+                    _groupLastPos = pos;
+                    CaptureMouse();
+                    return;
+                }
+            }
+
+            // 1. Snipping Tool: Chọn HCN & Chọn Tự Do (Lasso) -> Vừa chụp vừa chọn đối tượng bên trong
             if (Tool == "snip_rect")
             {
+                ClearGroupSelection();
                 ActiveSnipLasso.Clear();
                 _snipStartPt = pos;
                 ActiveSnipRect = new Rect(pos, pos);
@@ -522,6 +649,7 @@ namespace ScienceWordOverlay
             }
             if (Tool == "snip_lasso")
             {
+                ClearGroupSelection();
                 ActiveSnipRect = null;
                 ActiveSnipLasso.Clear();
                 ActiveSnipLasso.Add(pos);
@@ -549,12 +677,20 @@ namespace ScienceWordOverlay
             if (Tool == "select")
             {
                 var pt = FindNearestPoint(pos, 15.0);
-                if (pt != null) { SaveHistory(); _draggingPointId = pt.Id; _selectedPointId = pt.Id; _selectedShapeId = null; CaptureMouse(); InvalidateVisual(); return; }
+                if (pt != null) { ClearGroupSelection(); SaveHistory(); _draggingPointId = pt.Id; _selectedPointId = pt.Id; _selectedShapeId = null; CaptureMouse(); InvalidateVisual(); return; }
                 var txt = FindNearestText(pos);
-                if (txt != null) { SaveHistory(); _draggingTextId = txt.Id; CaptureMouse(); InvalidateVisual(); return; }
+                if (txt != null) { ClearGroupSelection(); SaveHistory(); _draggingTextId = txt.Id; CaptureMouse(); InvalidateVisual(); return; }
                 var sh = FindNearestSegment(pos, 12.0);
-                if (sh != null) { _selectedShapeId = sh.Id; _selectedPointId = null; InvalidateVisual(); return; }
-                _selectedPointId = null; _selectedShapeId = null; InvalidateVisual(); return;
+                if (sh != null) { ClearGroupSelection(); _selectedShapeId = sh.Id; _selectedPointId = null; InvalidateVisual(); return; }
+
+                // Click vùng trống -> Kéo khung chọn nhiều đối tượng (Marquee Selection)
+                ClearGroupSelection();
+                _selectedPointId = null; _selectedShapeId = null;
+                _marqueeStart = pos;
+                _marqueeRect = new Rect(pos, pos);
+                CaptureMouse();
+                InvalidateVisual();
+                return;
             }
 
             if (Tool is "pen" or "highlighter")
@@ -703,6 +839,21 @@ namespace ScienceWordOverlay
                 return;
             }
 
+            if (_isDraggingGroup)
+            {
+                MoveSelectedGroupBy(pos.X - _groupLastPos.X, pos.Y - _groupLastPos.Y);
+                _groupLastPos = pos;
+                InvalidateVisual();
+                return;
+            }
+
+            if (_marqueeRect.HasValue)
+            {
+                _marqueeRect = new Rect(_marqueeStart, pos);
+                InvalidateVisual();
+                return;
+            }
+
             if (_isDraggingSnip)
             {
                 if (Tool == "snip_rect") ActiveSnipRect = new Rect(_snipStartPt, pos);
@@ -725,10 +876,48 @@ namespace ScienceWordOverlay
         protected override void OnMouseUp(MouseButtonEventArgs e)
         {
             base.OnMouseUp(e);
+            if (_isDraggingGroup)
+            {
+                MoveSelectedGroupBy(pos.X - _groupLastPos.X, pos.Y - _groupLastPos.Y);
+                _groupLastPos = pos;
+                InvalidateVisual();
+                return;
+            }
+
+            if (_marqueeRect.HasValue)
+            {
+                _marqueeRect = new Rect(_marqueeStart, pos);
+                InvalidateVisual();
+                return;
+            }
+
+            if (_isDraggingGroup)
+            {
+                _isDraggingGroup = false;
+            }
+            if (_marqueeRect.HasValue)
+            {
+                var r = _marqueeRect.Value;
+                _marqueeRect = null;
+                if (r.Width > 5 || r.Height > 5)
+                    SelectObjectsInPredicate(pt => r.Contains(pt));
+                InvalidateVisual();
+            }
             if (_isDraggingSnip)
             {
                 _isDraggingSnip = false;
-                ShowToast("Đã khoanh vùng! Bấm [Chụp vùng] (hoặc Enter) để Copy ảnh, hoặc bấm [Tô vùng] để tô màu!", 4000);
+                if (Tool == "snip_rect" && ActiveSnipRect.HasValue && ActiveSnipRect.Value.Width > 4)
+                {
+                    var r = ActiveSnipRect.Value;
+                    SelectObjectsInPredicate(pt => r.Contains(pt));
+                }
+                else if (Tool == "snip_lasso" && ActiveSnipLasso.Count >= 3)
+                {
+                    SelectObjectsInPredicate(pt => PointInPolygon(pt, ActiveSnipLasso));
+                }
+                if (!HasGroupSelection())
+                    ShowToast("Đã khoanh vùng! Bấm [Chụp vùng] (Enter) để Copy ảnh, hoặc [Tô vùng] để tô màu!", 4000);
+                InvalidateVisual();
             }
             _draggingRevHandle = 0;
             _draggingPointId = null; _draggingTextId = null; _activeStroke = null;
@@ -751,6 +940,21 @@ namespace ScienceWordOverlay
 
         public void DeleteSelected()
         {
+            if (HasGroupSelection())
+            {
+                SaveHistory();
+                Scene.Points.RemoveAll(p => _selPointIds.Contains(p.Id));
+                Scene.Shapes.RemoveAll(s => _selPointIds.Contains(s.P1Id) || _selPointIds.Contains(s.P2Id));
+                Scene.Regions.RemoveAll(r => r.PointIds.Any(pid => _selPointIds.Contains(pid)));
+                Scene.Markers.RemoveAll(m => _selPointIds.Contains(m.P1Id) || _selPointIds.Contains(m.VertexId) || _selPointIds.Contains(m.P2Id));
+                Scene.Strokes.RemoveAll(st => _selStrokeIds.Contains(st.Id));
+                Scene.Texts.RemoveAll(t => _selTextIds.Contains(t.Id));
+                MagicFills.RemoveAll(mf => _selMagicIds.Contains(mf.Id));
+                ClearGroupSelection();
+                InvalidateVisual();
+                ShowToast("Đã xóa toàn bộ nhóm đối tượng đang chọn!");
+                return;
+            }
             if (_selectedShapeId != null) { SaveHistory(); Scene.Shapes.RemoveAll(s => s.Id == _selectedShapeId); _selectedShapeId = null; InvalidateVisual(); ShowToast("Đã xóa đường đang chọn"); }
             else if (_selectedPointId != null)
             {
@@ -935,6 +1139,14 @@ namespace ScienceWordOverlay
             {
                 var snipPen = new Pen(new SolidColorBrush(Color.FromRgb(239, 68, 68)), 2.0) { DashStyle = DashStyles.Dash };
                 var snipFill = new SolidColorBrush(Color.FromArgb(28, 59, 130, 246));
+                if (_marqueeRect.HasValue && _marqueeRect.Value.Width > 2)
+                    dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(30, 37, 99, 235)), new Pen(new SolidColorBrush(Color.FromRgb(37, 99, 235)), 1.6) { DashStyle = DashStyles.Dash }, _marqueeRect.Value);
+                if (HasGroupSelection())
+                {
+                    var gb = GetGroupSelectionBounds();
+                    if (gb.HasValue)
+                        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(20, 37, 99, 235)), new Pen(new SolidColorBrush(Color.FromRgb(37, 99, 235)), 1.8) { DashStyle = DashStyles.Dash }, gb.Value);
+                }
                 if (ActiveSnipRect.HasValue && ActiveSnipRect.Value.Width > 2)
                     dc.DrawRectangle(snipFill, snipPen, ActiveSnipRect.Value);
                 if (ActiveSnipLasso.Count >= 2)

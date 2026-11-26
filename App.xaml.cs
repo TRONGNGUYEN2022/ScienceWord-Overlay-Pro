@@ -14,7 +14,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v4 (Khớp tọa độ + Snip + Quay 3D tính V) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v5 (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
         }
     }
 }

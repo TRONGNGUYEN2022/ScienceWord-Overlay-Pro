@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using System.Windows;
 using ScienceWordOverlay.Models;
 
@@ -28,6 +30,7 @@ namespace ScienceWordOverlay.Utils
         public int RefRelH { get; set; } = 1;
         public int RefRelV { get; set; } = 1;
         public object? RefAnchor { get; set; }
+        public object? SourceOfficeShape { get; set; }
         public List<OfficeExtractedContour> Contours { get; set; } = new();
         public RevolutionScene? Revolution { get; set; }
         public string Summary { get; set; } = "";
@@ -39,6 +42,7 @@ namespace ScienceWordOverlay.Utils
         private const int MsoGroup = 6;
         private const int MsoSegmentCurve = 1;
         private const int MsoTrue = -1;
+        private const string AltPrefix = "SWOV_V5|";
 
         [DllImport("ole32.dll")]
         private static extern int CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string lpszProgID, out Guid pclsid);
@@ -72,7 +76,158 @@ namespace ScienceWordOverlay.Utils
             return null;
         }
 
-        public static bool InsertPngToOffice(OfficeSelectionContext? ctx, string targetProcName, string pngPath, Rect screenBoxDip, out string? error)
+        
+        private class EmbeddedPayload
+        {
+            public double BoxW { get; set; }
+            public double BoxH { get; set; }
+            public SceneState Scene { get; set; } = new();
+        }
+
+        public static string EncodeSceneToAltText(SceneState scene, Rect screenBoxDip)
+        {
+            var rel = JsonSerializer.Deserialize<SceneState>(JsonSerializer.Serialize(scene)) ?? new SceneState();
+            foreach (var p in rel.Points) { p.X -= screenBoxDip.Left; p.Y -= screenBoxDip.Top; }
+            foreach (var st in rel.Strokes)
+                for (int i = 0; i < st.Points.Count; i++)
+                {
+                    st.Points[i][0] -= screenBoxDip.Left;
+                    st.Points[i][1] -= screenBoxDip.Top;
+                }
+            foreach (var t in rel.Texts) { t.X -= screenBoxDip.Left; t.Y -= screenBoxDip.Top; }
+
+            var payload = new EmbeddedPayload { BoxW = screenBoxDip.Width, BoxH = screenBoxDip.Height, Scene = rel };
+            string json = JsonSerializer.Serialize(payload);
+            return AltPrefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        }
+
+        public static (SceneState scene, OfficeSelectionContext ctx)? TryReadSelectedOverlayImage(string procName, double dpiScaleX, double dpiScaleY)
+        {
+            try
+            {
+                string p = procName.ToUpperInvariant();
+                if (p == "WINWORD")
+                {
+                    object? wordObj = GetActiveComObject("Word.Application");
+                    if (wordObj == null) return null;
+                    dynamic wordApp = wordObj;
+                    if ((int)wordApp.Documents.Count == 0) return null;
+                    object winObj = wordApp.ActiveWindow;
+                    dynamic? sr = null;
+                    try { sr = wordApp.Selection.ShapeRange; } catch { return null; }
+                    if (sr == null || (int)sr.Count != 1) return null;
+                    object shObj = sr.Item(1);
+                    dynamic sh = shObj;
+                    string alt = "";
+                    try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+                    if (!TryWordGetPoint(winObj, shObj, out Rect shPx)) return null;
+
+                    return DecodeOverlayImage(alt, OfficeAppKind.Word, shObj, shPx, dpiScaleX, dpiScaleY);
+                }
+                if (p == "POWERPNT")
+                {
+                    object? pptObj = GetActiveComObject("PowerPoint.Application");
+                    if (pptObj == null) return null;
+                    dynamic pptApp = pptObj;
+                    if ((int)pptApp.Presentations.Count == 0) return null;
+                    dynamic win = pptApp.ActiveWindow;
+                    dynamic? sr = null;
+                    try { sr = win.Selection.ShapeRange; } catch { return null; }
+                    if (sr == null || (int)sr.Count != 1) return null;
+                    object shObj = sr.Item(1);
+                    dynamic sh = shObj;
+                    string alt = "";
+                    try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+
+                    float lPt = Convert.ToSingle(sh.Left), tPt = Convert.ToSingle(sh.Top);
+                    float wPt = Convert.ToSingle(sh.Width), hPt = Convert.ToSingle(sh.Height);
+                    double x1 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt));
+                    double y1 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt));
+                    double x2 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt + wPt));
+                    double y2 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt + hPt));
+                    return DecodeOverlayImage(alt, OfficeAppKind.PowerPoint, shObj, new Rect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1)), dpiScaleX, dpiScaleY);
+                }
+                if (p == "EXCEL")
+                {
+                    object? xlObj = GetActiveComObject("Excel.Application");
+                    if (xlObj == null) return null;
+                    dynamic xlApp = xlObj;
+                    if ((int)xlApp.Workbooks.Count == 0) return null;
+                    dynamic win = xlApp.ActiveWindow;
+                    dynamic? sr = null;
+                    try { sr = xlApp.Selection.ShapeRange; } catch { return null; }
+                    if (sr == null || (int)sr.Count != 1) return null;
+                    object shObj = sr.Item(1);
+                    dynamic sh = shObj;
+                    string alt = "";
+                    try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+
+                    double lPt = Convert.ToDouble(sh.Left), tPt = Convert.ToDouble(sh.Top);
+                    double wPt = Convert.ToDouble(sh.Width), hPt = Convert.ToDouble(sh.Height);
+                    double x1 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt));
+                    double y1 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt));
+                    double x2 = Convert.ToDouble(win.PointsToScreenPixelsX(lPt + wPt));
+                    double y2 = Convert.ToDouble(win.PointsToScreenPixelsY(tPt + hPt));
+                    return DecodeOverlayImage(alt, OfficeAppKind.Excel, shObj, new Rect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1)), dpiScaleX, dpiScaleY);
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static (SceneState scene, OfficeSelectionContext ctx)? DecodeOverlayImage(
+            string alt, OfficeAppKind kind, object shObj, Rect shPx, double dpiScaleX, double dpiScaleY)
+        {
+            try
+            {
+                string b64 = alt.Substring(AltPrefix.Length);
+                string json = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+                var payload = JsonSerializer.Deserialize<EmbeddedPayload>(json);
+                if (payload == null) return null;
+
+                Rect shDip = new(shPx.Left / dpiScaleX, shPx.Top / dpiScaleY, Math.Max(2, shPx.Width / dpiScaleX), Math.Max(2, shPx.Height / dpiScaleY));
+                double sx = payload.BoxW > 2 ? shDip.Width / payload.BoxW : 1.0;
+                double sy = payload.BoxH > 2 ? shDip.Height / payload.BoxH : 1.0;
+
+                var sc = payload.Scene;
+                foreach (var pt in sc.Points) { pt.X = shDip.Left + pt.X * sx; pt.Y = shDip.Top + pt.Y * sy; }
+                foreach (var st in sc.Strokes)
+                    for (int i = 0; i < st.Points.Count; i++)
+                    {
+                        st.Points[i][0] = shDip.Left + st.Points[i][0] * sx;
+                        st.Points[i][1] = shDip.Top + st.Points[i][1] * sy;
+                    }
+                foreach (var t in sc.Texts) { t.X = shDip.Left + t.X * sx; t.Y = shDip.Top + t.Y * sy; }
+
+                dynamic sh = shObj;
+                double wPt = Math.Max(1.0, Convert.ToDouble(sh.Width));
+                var ctx = new OfficeSelectionContext
+                {
+                    AppKind = kind,
+                    ScreenBoundsDip = shDip,
+                    DipPerPt = shDip.Width / wPt,
+                    RefDipLeft = shDip.Left,
+                    RefDipTop = shDip.Top,
+                    RefDocLeftPt = Convert.ToDouble(sh.Left),
+                    RefDocTopPt = Convert.ToDouble(sh.Top),
+                    SourceOfficeShape = shObj,
+                    Summary = "Đang sửa hình cũ (Double-Click)"
+                };
+                if (kind == OfficeAppKind.Word)
+                {
+                    try { ctx.RefRelH = (int)sh.RelativeHorizontalPosition; } catch { }
+                    try { ctx.RefRelV = (int)sh.RelativeVerticalPosition; } catch { }
+                    try { ctx.RefAnchor = sh.Anchor; } catch { }
+                }
+                return (sc, ctx);
+            }
+            catch { return null; }
+        }
+
+        public static bool InsertPngToOffice(OfficeSelectionContext? ctx, string targetProcName, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
         {
             OfficeAppKind kind = ctx?.AppKind ?? targetProcName.ToUpperInvariant() switch
             {
@@ -82,9 +237,9 @@ namespace ScienceWordOverlay.Utils
                 _ => OfficeAppKind.None
             };
 
-            if (kind == OfficeAppKind.Word) return InsertPngToWord(ctx, pngPath, screenBoxDip, out error);
-            if (kind == OfficeAppKind.PowerPoint) return InsertPngToPowerPoint(ctx, pngPath, screenBoxDip, out error);
-            if (kind == OfficeAppKind.Excel) return InsertPngToExcel(ctx, pngPath, screenBoxDip, out error);
+            if (kind == OfficeAppKind.Word) return InsertPngToWord(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
+            if (kind == OfficeAppKind.PowerPoint) return InsertPngToPowerPoint(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
+            if (kind == OfficeAppKind.Excel) return InsertPngToExcel(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
 
             error = "App đích không phải Office COM.";
             return false;
@@ -128,7 +283,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc Word: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToWord(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, out string? error)
+        private static bool InsertPngToWord(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
         {
             error = null;
             object? wordObj = GetActiveComObject("Word.Application");
@@ -156,6 +311,15 @@ namespace ScienceWordOverlay.Utils
                 }
                 pic.Left = (float)leftPt; pic.Top = (float)topPt;
                 pic.Width = (float)wPt; pic.Height = (float)hPt;
+                if (sceneToEmbed != null)
+                {
+                    try { pic.AlternativeText = EncodeSceneToAltText(sceneToEmbed, screenBoxDip); } catch { }
+                }
+                if (ctx?.SourceOfficeShape != null)
+                {
+                    try { ((dynamic)ctx.SourceOfficeShape).Delete(); } catch { }
+                    ctx.SourceOfficeShape = pic;
+                }
                 return true;
             }
             catch (Exception ex) { error = "Lỗi chèn Word: " + ex.Message; return false; }
@@ -208,7 +372,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc PowerPoint: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToPowerPoint(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, out string? error)
+        private static bool InsertPngToPowerPoint(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
         {
             error = null;
             object? pptObj = GetActiveComObject("PowerPoint.Application");
@@ -223,7 +387,16 @@ namespace ScienceWordOverlay.Utils
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
-                slide.Shapes.AddPicture(pngPath, 0, -1, (float)leftPt, (float)topPt, (float)wPt, (float)hPt);
+                dynamic pic = slide.Shapes.AddPicture(pngPath, 0, -1, (float)leftPt, (float)topPt, (float)wPt, (float)hPt);
+                if (sceneToEmbed != null)
+                {
+                    try { pic.AlternativeText = EncodeSceneToAltText(sceneToEmbed, screenBoxDip); } catch { }
+                }
+                if (ctx?.SourceOfficeShape != null)
+                {
+                    try { ((dynamic)ctx.SourceOfficeShape).Delete(); } catch { }
+                    ctx.SourceOfficeShape = pic;
+                }
                 return true;
             }
             catch (Exception ex) { error = "Lỗi chèn PowerPoint: " + ex.Message; return false; }
@@ -276,7 +449,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc Excel: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToExcel(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, out string? error)
+        private static bool InsertPngToExcel(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
         {
             error = null;
             object? xlObj = GetActiveComObject("Excel.Application");
@@ -291,7 +464,16 @@ namespace ScienceWordOverlay.Utils
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
-                sheet.Shapes.AddPicture(pngPath, 0, -1, (float)leftPt, (float)topPt, (float)wPt, (float)hPt);
+                dynamic pic = sheet.Shapes.AddPicture(pngPath, 0, -1, (float)leftPt, (float)topPt, (float)wPt, (float)hPt);
+                if (sceneToEmbed != null)
+                {
+                    try { pic.AlternativeText = EncodeSceneToAltText(sceneToEmbed, screenBoxDip); } catch { }
+                }
+                if (ctx?.SourceOfficeShape != null)
+                {
+                    try { ((dynamic)ctx.SourceOfficeShape).Delete(); } catch { }
+                    ctx.SourceOfficeShape = pic;
+                }
                 return true;
             }
             catch (Exception ex) { error = "Lỗi chèn Excel: " + ex.Message; return false; }
