@@ -76,6 +76,18 @@ namespace ScienceWordOverlay
 
         private string _toastMsg = "";
         private readonly DispatcherTimer _toastTimer;
+        // Mô phỏng diễn hoạt Thước thẳng + Bút vẽ lần lượt từng cạnh cho Hình 3D (Chóp, Lập phương)
+        private sealed class AnimEdgeTask
+        {
+            public string P1Id { get; set; } = "";
+            public string P2Id { get; set; } = "";
+            public string Dash { get; set; } = "solid";
+        }
+        private readonly Queue<AnimEdgeTask> _animEdgeQueue = new();
+        private AnimEdgeTask? _currentAnimEdge;
+        private double _animEdgeProgress = 0.0;
+        private readonly DispatcherTimer _animDrawTimer;
+
         private const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
         public OverlaySurface()
@@ -88,6 +100,34 @@ namespace ScienceWordOverlay
                 _toastMsg = "";
                 InvalidateVisual();
             };
+
+            _animDrawTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _animDrawTimer.Tick += OnAnimDrawTick;
+        }
+
+        private void OnAnimDrawTick(object? sender, EventArgs e)
+        {
+            if (_currentAnimEdge == null)
+            {
+                if (_animEdgeQueue.Count == 0)
+                {
+                    _animDrawTimer.Stop();
+                    InvalidateVisual();
+                    return;
+                }
+                _currentAnimEdge = _animEdgeQueue.Dequeue();
+                _animEdgeProgress = 0.0;
+            }
+
+            _animEdgeProgress += 0.14; // ~7 frames (~110ms) per edge for snappy, smooth ruler+pen motion
+            if (_animEdgeProgress >= 1.0)
+            {
+                AddShape("segment", _currentAnimEdge.P1Id, _currentAnimEdge.P2Id, _currentAnimEdge.Dash);
+                _currentAnimEdge = null;
+                _animEdgeProgress = 0.0;
+                if (_animEdgeQueue.Count == 0) _animDrawTimer.Stop();
+            }
+            InvalidateVisual();
         }
 
         public void ShowToast(string msg, int ms = 3200)
@@ -264,6 +304,9 @@ namespace ScienceWordOverlay
 
         private void ClearActiveSteps()
         {
+            _animDrawTimer.Stop();
+            _animEdgeQueue.Clear();
+            _currentAnimEdge = null;
             ClearGroupSelection();
             _stepPoints.Clear();
             _activeStroke = null;
@@ -565,8 +608,14 @@ namespace ScienceWordOverlay
         public void InsertPreset3D(string kind)
         {
             SaveHistory();
+            _animDrawTimer.Stop();
+            _animEdgeQueue.Clear();
+            _currentAnimEdge = null;
+
             double cx = ActualWidth > 100 ? ActualWidth / 2.0 : SystemParameters.PrimaryScreenWidth / 2.0;
             double cy = ActualHeight > 100 ? ActualHeight / 2.0 : SystemParameters.PrimaryScreenHeight / 2.0;
+            var edgeTasks = new List<AnimEdgeTask>();
+
             if (kind == "pyramid")
             {
                 var pS = GetOrCreatePoint(new Point(cx - 20, cy - 170), "S");
@@ -574,9 +623,11 @@ namespace ScienceWordOverlay
                 var pB = GetOrCreatePoint(new Point(cx - 190, cy + 120), "B");
                 var pC = GetOrCreatePoint(new Point(cx + 90, cy + 120), "C");
                 var pD = GetOrCreatePoint(new Point(cx + 170, cy + 30), "D");
-                foreach (var (a, b) in new[] { (pS, pA), (pA, pB), (pA, pD), (pA, pC), (pB, pD) }) AddShape("segment", a.Id, b.Id, "dashed");
-                foreach (var (a, b) in new[] { (pS, pB), (pS, pC), (pS, pD), (pB, pC), (pC, pD) }) AddShape("segment", a.Id, b.Id, "solid");
-                ShowToast("Đã chèn Hình chóp tứ giác S.ABCD chuẩn nét đứt SGK");
+                foreach (var (a, b) in new[] { (pS, pA), (pA, pB), (pA, pD), (pA, pC), (pB, pD) })
+                    edgeTasks.Add(new AnimEdgeTask { P1Id = a.Id, P2Id = b.Id, Dash = "dashed" });
+                foreach (var (a, b) in new[] { (pS, pB), (pS, pC), (pS, pD), (pB, pC), (pC, pD) })
+                    edgeTasks.Add(new AnimEdgeTask { P1Id = a.Id, P2Id = b.Id, Dash = "solid" });
+                ShowToast("Đang dùng Thước & Bút mô phỏng vẽ Hình chóp S.ABCD chuẩn nét đứt SGK...");
             }
             else if (kind == "cube")
             {
@@ -589,9 +640,21 @@ namespace ScienceWordOverlay
                 var pB1 = GetOrCreatePoint(new Point(pB.X, pB.Y - s), "B'");
                 var pC1 = GetOrCreatePoint(new Point(pC.X, pC.Y - s), "C'");
                 var pD1 = GetOrCreatePoint(new Point(pD.X, pD.Y - s), "D'");
-                foreach (var (a, b) in new[] { (pA, pB), (pA, pD), (pA, pA1) }) AddShape("segment", a.Id, b.Id, "dashed");
-                foreach (var (a, b) in new[] { (pB, pC), (pC, pD), (pB, pB1), (pC, pC1), (pD, pD1), (pA1, pB1), (pB1, pC1), (pC1, pD1), (pD1, pA1) }) AddShape("segment", a.Id, b.Id, "solid");
-                ShowToast("Đã chèn Hình lập phương ABCD.A'B'C'D' chuẩn SGK");
+                foreach (var (a, b) in new[] { (pA, pB), (pA, pD), (pA, pA1) })
+                    edgeTasks.Add(new AnimEdgeTask { P1Id = a.Id, P2Id = b.Id, Dash = "dashed" });
+                foreach (var (a, b) in new[] { (pB, pC), (pC, pD), (pB, pB1), (pC, pC1), (pD, pD1), (pA1, pB1), (pB1, pC1), (pC1, pD1), (pD1, pA1) })
+                    edgeTasks.Add(new AnimEdgeTask { P1Id = a.Id, P2Id = b.Id, Dash = "solid" });
+                ShowToast("Đang dùng Thước & Bút mô phỏng vẽ Hình lập phương ABCD.A'B'C'D'...");
+            }
+
+            if (ShowVirtualTools && edgeTasks.Count > 0)
+            {
+                foreach (var t in edgeTasks) _animEdgeQueue.Enqueue(t);
+                _animDrawTimer.Start();
+            }
+            else
+            {
+                foreach (var t in edgeTasks) AddShape("segment", t.P1Id, t.P2Id, t.Dash);
             }
             InvalidateVisual();
         }
@@ -895,7 +958,7 @@ namespace ScienceWordOverlay
                 }
                 InvalidateVisual(); return;
             }
-            if (_stepPoints.Count > 0 || Tool is "pen" or "highlighter") InvalidateVisual();
+            if (_stepPoints.Count > 0 || (ShowVirtualTools && Tool is not "select" and not "snip_rect" and not "snip_lasso" and not "magic_wand")) InvalidateVisual();
         }
 
         protected override void OnMouseUp(MouseButtonEventArgs e)
@@ -1196,12 +1259,11 @@ namespace ScienceWordOverlay
                     using (var ctx = geo.Open()) { ctx.BeginFigure(ActiveSnipLasso[0], true, !_isDraggingSnip); ctx.PolyLineTo(ActiveSnipLasso.Skip(1).ToList(), true, false); }
                     geo.Freeze(); dc.DrawGeometry(snipFill, snipPen, geo);
                 }
+                if (_currentAnimEdge != null) DrawAnimated3DEdgeWithRulerAndPen(dc, dpi);
                 if (_stepPoints.Count > 0) DrawLivePreviewAndTools(dc, dpi);
-                if (ShowVirtualTools && (Tool is "pen" or "highlighter") && _mousePos.X > 1 && _mousePos.Y > 1)
+                else if (ShowVirtualTools && _mousePos.X > 1 && _mousePos.Y > 1)
                 {
-                    string vStyle = Tool == "highlighter" ? "highlighter" : PenTipStyle;
-                    Color vCol = ParseColor(vStyle == "highlighter" ? FillColorHex : StrokeColorHex, 1.0);
-                    DrawVirtualPen(dc, _mousePos, vCol, vStyle, _activeStroke != null);
+                    DrawIdleVirtualToolAtCursor(dc, dpi);
                 }
             }
         }
@@ -1332,25 +1394,240 @@ namespace ScienceWordOverlay
             }
         }
 
+        private void DrawIdleVirtualToolAtCursor(DrawingContext dc, double dpi)
+        {
+            if (Tool is "select" or "snip_rect" or "snip_lasso" or "magic_wand" or "text") return;
+
+            if (Tool == "circle")
+            {
+                // Hiện Compa nhỏ sẵn sàng đặt tâm O tại con trỏ chuột
+                DrawVirtualCompass(dc, _mousePos, new Point(_mousePos.X + 46, _mousePos.Y + 12), dpi, isIdle: true);
+                return;
+            }
+            if (Tool is "altitude" or "right_angle")
+            {
+                // Hiện Êke vuông góc sẵn sàng tại con trỏ
+                DrawVirtualSetSquare(dc, _mousePos, 0.0, 115.0, 75.0, dpi);
+                DrawVirtualPen(dc, _mousePos, ParseColor(StrokeColorHex, 1.0), PenTipStyle, false);
+                return;
+            }
+            if (Tool == "fill_angle")
+            {
+                // Hiện Thước đo độ nhỏ sẵn sàng tại con trỏ
+                DrawVirtualProtractor(dc, _mousePos, 0.0, 68.0, dpi);
+                DrawVirtualPen(dc, _mousePos, ParseColor(FillColorHex, 1.0), PenTipStyle, false);
+                return;
+            }
+
+            string vStyle = Tool == "highlighter" ? "highlighter"
+                : (Tool == "dashed" ? "dash" : PenTipStyle);
+            Color vCol = ParseColor(vStyle == "highlighter" ? FillColorHex : StrokeColorHex, 1.0);
+            DrawVirtualPen(dc, _mousePos, vCol, vStyle, _activeStroke != null);
+        }
+
+        private void DrawAnimated3DEdgeWithRulerAndPen(DrawingContext dc, double dpi)
+        {
+            if (_currentAnimEdge == null) return;
+            var p1 = GetPoint(_currentAnimEdge.P1Id);
+            var p2 = GetPoint(_currentAnimEdge.P2Id);
+            if (p1 == null || p2 == null) return;
+
+            Point a = new(p1.X, p1.Y), b = new(p2.X, p2.Y);
+            double t = Math.Clamp(_animEdgeProgress, 0.0, 1.0);
+            Point cur = new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+
+            var pen = MakePen(StrokeColorHex, StrokeWidth, _currentAnimEdge.Dash, false);
+            dc.DrawLine(pen, a, cur);
+
+            DrawVirtualRuler(dc, a, b, dpi);
+            DrawVirtualPen(dc, cur, ParseColor(StrokeColorHex, 1.0), _currentAnimEdge.Dash == "dashed" ? "dash" : PenTipStyle, true);
+        }
+
         private void DrawLivePreviewAndTools(DrawingContext dc, double dpi)
         {
             var p1 = GetPoint(_stepPoints[0]);
             if (p1 == null) return;
             Point pt1 = new(p1.X, p1.Y), pt2 = _mousePos;
             var prevPen = new Pen(new SolidColorBrush(ParseColor("#2563EB")), 1.8) { DashStyle = DashStyles.Dash };
+            Color penCol = ParseColor(StrokeColorHex, 1.0);
 
-            if (Tool is "segment" or "dashed" or "vector") { dc.DrawLine(prevPen, pt1, pt2); if (ShowVirtualTools) DrawVirtualRuler(dc, pt1, pt2, dpi); }
-            else if (Tool == "circle") { dc.DrawEllipse(null, prevPen, pt1, Dist(pt1, pt2), Dist(pt1, pt2)); if (ShowVirtualTools) DrawVirtualCompass(dc, pt1, pt2, dpi); }
-            else if (Tool == "rect") dc.DrawRectangle(null, prevPen, new Rect(pt1, pt2));
+            if (Tool is "segment" or "dashed" or "vector")
+            {
+                dc.DrawLine(prevPen, pt1, pt2);
+                if (ShowVirtualTools)
+                {
+                    DrawVirtualRuler(dc, pt1, pt2, dpi);
+                    DrawVirtualPen(dc, pt2, penCol, Tool == "dashed" ? "dash" : PenTipStyle, true);
+                }
+            }
+            else if (Tool == "circle")
+            {
+                dc.DrawEllipse(null, prevPen, pt1, Dist(pt1, pt2), Dist(pt1, pt2));
+                if (ShowVirtualTools) DrawVirtualCompass(dc, pt1, pt2, dpi, isIdle: false);
+            }
+            else if (Tool == "rect")
+            {
+                var r = new Rect(pt1, pt2);
+                dc.DrawRectangle(null, prevPen, r);
+                if (ShowVirtualTools)
+                {
+                    // Hiện Êke góc vuông bám tại góc đối diện + Bút vẽ ở đầu chuột
+                    double ekeW = Math.Clamp(r.Width, 90, 220);
+                    double ekeH = Math.Clamp(r.Height, 65, 150);
+                    DrawVirtualSetSquare(dc, new Point(r.Left, r.Bottom), 0.0, ekeW, ekeH, dpi);
+                    DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
+                }
+            }
             else if (Tool is "triangle" or "fill_area")
             {
                 var pts = _stepPoints.Select(GetPoint).Where(p => p != null).Select(p => new Point(p!.X, p.Y)).ToList();
+                Point lastAnchor = pts[^1];
                 pts.Add(pt2);
                 var geo = new StreamGeometry();
                 using (var ctx = geo.Open()) { ctx.BeginFigure(pts[0], Tool == "fill_area", Tool == "fill_area"); ctx.PolyLineTo(pts.Skip(1).ToList(), true, false); }
                 geo.Freeze();
                 dc.DrawGeometry((Tool == "fill_area" && pts.Count >= 3) ? MakeRegionBrush(FillColorHex, FillOpacity, FillPattern) : null, prevPen, geo);
+
+                if (ShowVirtualTools)
+                {
+                    DrawVirtualRuler(dc, lastAnchor, pt2, dpi);
+                    DrawVirtualPen(dc, pt2, Tool == "fill_area" ? ParseColor(FillColorHex, 1.0) : penCol, PenTipStyle, true);
+                }
             }
+            else if (Tool == "altitude")
+            {
+                // Đã chọn đỉnh, đang rê tìm cạnh đáy -> hiện Êke vuông góc + Bút vẽ
+                var sh = FindNearestSegment(pt2, 22.0);
+                if (sh != null)
+                {
+                    var s1 = GetPoint(sh.P1Id); var s2 = GetPoint(sh.P2Id);
+                    if (s1 != null && s2 != null)
+                    {
+                        Point foot = ProjectPointOnLine(pt1, new Point(s1.X, s1.Y), new Point(s2.X, s2.Y));
+                        dc.DrawLine(prevPen, pt1, foot);
+                        if (ShowVirtualTools)
+                        {
+                            double ang = Math.Atan2(s2.Y - s1.Y, s2.X - s1.X) * 180.0 / Math.PI;
+                            DrawVirtualSetSquare(dc, foot, ang, 150.0, Math.Clamp(Dist(pt1, foot), 75.0, 175.0), dpi);
+                            DrawVirtualPen(dc, foot, penCol, PenTipStyle, true);
+                        }
+                        return;
+                    }
+                }
+                dc.DrawLine(prevPen, pt1, pt2);
+                if (ShowVirtualTools)
+                {
+                    DrawVirtualSetSquare(dc, pt2, 0.0, 130.0, 85.0, dpi);
+                    DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
+                }
+            }
+            else if (Tool is "fill_angle" or "right_angle")
+            {
+                if (_stepPoints.Count == 1)
+                {
+                    dc.DrawLine(prevPen, pt1, pt2);
+                    if (ShowVirtualTools)
+                    {
+                        DrawVirtualRuler(dc, pt1, pt2, dpi);
+                        DrawVirtualPen(dc, pt2, penCol, PenTipStyle, true);
+                    }
+                }
+                else if (_stepPoints.Count == 2)
+                {
+                    var pv = GetPoint(_stepPoints[1]);
+                    if (pv != null)
+                    {
+                        Point vPt = new(pv.X, pv.Y);
+                        dc.DrawLine(prevPen, pt1, vPt);
+                        dc.DrawLine(prevPen, vPt, pt2);
+                        if (ShowVirtualTools)
+                        {
+                            double baseAng = Math.Atan2(pt1.Y - vPt.Y, pt1.X - vPt.X) * 180.0 / Math.PI;
+                            if (Tool == "right_angle")
+                                DrawVirtualSetSquare(dc, vPt, baseAng, 130.0, 90.0, dpi);
+                            else
+                                DrawVirtualProtractor(dc, vPt, baseAng, 95.0, dpi);
+                            DrawVirtualPen(dc, pt2, Tool == "fill_angle" ? ParseColor(FillColorHex, 1.0) : penCol, PenTipStyle, true);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void DrawVirtualSetSquare(DrawingContext dc, Point origin, double angleDeg, double w, double h, double dpi)
+        {
+            dc.PushTransform(new TranslateTransform(origin.X, origin.Y));
+            dc.PushTransform(new RotateTransform(angleDeg));
+
+            var outer = new StreamGeometry();
+            using (var ctx = outer.Open())
+            {
+                ctx.BeginFigure(new Point(0, 0), true, true);
+                ctx.PolyLineTo(new[] { new Point(w, 0), new Point(0, -h) }, true, false);
+            }
+            outer.Freeze();
+
+            dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(145, 191, 219, 254)),
+                new Pen(new SolidColorBrush(Color.FromArgb(225, 30, 64, 175)), 1.8), outer);
+
+            // Tam giác rỗng bên trong Êke
+            if (w > 85 && h > 55)
+            {
+                var inner = new StreamGeometry();
+                using (var ctx = inner.Open())
+                {
+                    ctx.BeginFigure(new Point(22, -16), true, true);
+                    ctx.PolyLineTo(new[] { new Point(w - 44, -16), new Point(22, -(h - 34)) }, true, false);
+                }
+                inner.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(110, 255, 255, 255)),
+                    new Pen(new SolidColorBrush(Color.FromArgb(190, 30, 64, 175)), 1.2), inner);
+            }
+
+            // Ký hiệu góc vuông 90° màu đỏ trên Êke
+            var sqPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 220, 38, 38)), 1.6);
+            dc.DrawLine(sqPen, new Point(12, 0), new Point(12, -12));
+            dc.DrawLine(sqPen, new Point(12, -12), new Point(0, -12));
+
+            // Vạch chia cm trên 2 cạnh góc vuông
+            var tickPen = new Pen(new SolidColorBrush(Color.FromArgb(200, 30, 58, 138)), 0.9);
+            for (double x = 8; x < w - 10; x += 8) dc.DrawLine(tickPen, new Point(x, 0), new Point(x, x % 16 == 0 ? -8 : -5));
+            for (double y = 8; y < h - 10; y += 8) dc.DrawLine(tickPen, new Point(0, -y), new Point(y % 16 == 0 ? 8 : 5, -y));
+
+            dc.Pop();
+            dc.Pop();
+        }
+
+        private static void DrawVirtualProtractor(DrawingContext dc, Point center, double angleDeg, double radius, double dpi)
+        {
+            dc.PushTransform(new TranslateTransform(center.X, center.Y));
+            dc.PushTransform(new RotateTransform(angleDeg));
+
+            var pie = new StreamGeometry();
+            using (var ctx = pie.Open())
+            {
+                ctx.BeginFigure(new Point(-radius, 0), true, true);
+                ctx.ArcTo(new Point(radius, 0), new Size(radius, radius), 0, false, SweepDirection.Clockwise, true, false);
+                ctx.LineTo(new Point(-radius, 0), true, false);
+            }
+            pie.Freeze();
+
+            dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(145, 224, 242, 254)),
+                new Pen(new SolidColorBrush(Color.FromArgb(225, 2, 132, 199)), 1.8), pie);
+
+            var tickPen = new Pen(new SolidColorBrush(Color.FromArgb(200, 12, 74, 110)), 1.0);
+            for (int deg = 0; deg <= 180; deg += 15)
+            {
+                double rad = -deg * Math.PI / 180.0;
+                double c = Math.Cos(rad), s = Math.Sin(rad);
+                double len = (deg % 45 == 0) ? 12 : 7;
+                dc.DrawLine(tickPen, new Point(c * radius, s * radius), new Point(c * (radius - len), s * (radius - len)));
+            }
+
+            // Tâm thước đo độ màu đỏ
+            dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(220, 38, 38)), new Pen(Brushes.White, 1.2), new Point(0, 0), 3.2, 3.2);
+            dc.Pop();
+            dc.Pop();
         }
 
 
@@ -1438,20 +1715,40 @@ namespace ScienceWordOverlay
             dc.Pop(); dc.Pop();
         }
 
-        private static void DrawVirtualCompass(DrawingContext dc, Point center, Point tip, double dpi)
+        private static void DrawVirtualCompass(DrawingContext dc, Point center, Point tip, double dpi, bool isIdle = false)
         {
             double r = Dist(center, tip);
             if (r < 10) return;
             Point mid = new((center.X + tip.X) / 2.0, (center.Y + tip.Y) / 2.0);
             double ux = (tip.X - center.X) / r, uy = (tip.Y - center.Y) / r;
-            Point pivot = new(mid.X + (-uy) * Math.Clamp(r * 1.15, 85.0, 185.0), mid.Y + ux * Math.Clamp(r * 1.15, 85.0, 185.0));
+            double nx = -uy, ny = ux;
+            if (ny > 0) { nx = -nx; ny = -ny; } // Luôn hướng khớp compa lên trên
+            double h = isIdle ? 68.0 : Math.Clamp(r * 1.15, 85.0, 185.0);
+            Point pivot = new(mid.X + nx * h, mid.Y + ny * h);
 
-            var legPen = new Pen(new SolidColorBrush(Color.FromArgb(225, 51, 65, 85)), 4.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            dc.DrawLine(legPen, pivot, center); dc.DrawLine(legPen, pivot, tip);
-            dc.DrawEllipse(new SolidColorBrush(ParseColor("#F59E0B")), new Pen(new SolidColorBrush(ParseColor("#78350F")), 1.8), pivot, 7, 7);
-            dc.DrawEllipse(new SolidColorBrush(ParseColor("#DC2626")), null, center, 3.8, 3.8);
-            dc.DrawEllipse(new SolidColorBrush(ParseColor("#2563EB")), null, tip, 3.8, 3.8);
-            dc.DrawText(new FormattedText($"R = {r / 38.0:0.0} cm", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal), 12, new SolidColorBrush(ParseColor("#BE123C")), dpi), new Point(mid.X + 8, mid.Y - 18));
+            byte a = (byte)(isIdle ? 175 : 235);
+            var legPen = new Pen(new SolidColorBrush(Color.FromArgb(a, 51, 65, 85)), 4.8) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var shinePen = new Pen(new SolidColorBrush(Color.FromArgb(a, 203, 213, 225)), 1.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawLine(legPen, pivot, center);
+            dc.DrawLine(legPen, pivot, tip);
+            dc.DrawLine(shinePen, pivot, center);
+            dc.DrawLine(shinePen, pivot, tip);
+
+            // Đỉnh tay cầm compa
+            dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(a, 30, 41, 59)), 5.0) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round },
+                pivot, new Point(pivot.X + nx * 18, pivot.Y + ny * 18));
+            dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(a, 245, 158, 11)), new Pen(new SolidColorBrush(Color.FromArgb(a, 120, 53, 15)), 1.8), pivot, 7, 7);
+
+            // Kim nhọn tại tâm O & Ngòi bút chì gắn trên chân quay
+            dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(a, 220, 38, 38)), new Pen(Brushes.White, 1.2), center, 3.8, 3.8);
+            DrawVirtualPen(dc, tip, Color.FromArgb(a, 37, 99, 235), "pencil", !isIdle);
+
+            if (!isIdle)
+            {
+                dc.DrawText(new FormattedText($"R = {r / 38.0:0.0} cm", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal), 12, new SolidColorBrush(ParseColor("#BE123C")), dpi),
+                    new Point(mid.X + 8, mid.Y - 18));
+            }
         }
 
         // ================= XUẤT ẢNH =================

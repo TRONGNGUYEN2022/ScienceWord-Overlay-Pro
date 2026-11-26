@@ -14,7 +14,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v6 (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v7 (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
         }
     }
 }
