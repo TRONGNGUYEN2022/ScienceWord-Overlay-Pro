@@ -34,7 +34,7 @@ namespace ScienceWordOverlay
                 : "Chế độ VẼ TRONG SUỐT: Sẵn sàng vẽ, tô màu, 2D & 3D");
         }
 
-        private Button MakeCtxBtn(string text, Action onClick, string bgHex = "#1E293B", string fgHex = "#F8FAFC")
+        private Button MakeCtxBtn(string text, Action onClick, string bgHex = "#1E293B", string fgHex = "#F8FAFC", string? tooltip = null)
         {
             var btn = new Button
             {
@@ -47,7 +47,8 @@ namespace ScienceWordOverlay
                 Margin = new Thickness(2, 0, 2, 0),
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
-                Cursor = System.Windows.Input.Cursors.Hand
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = tooltip
             };
             btn.Click += (_, _) => onClick();
             return btn;
@@ -62,40 +63,68 @@ namespace ScienceWordOverlay
             }
 
             ContextMenuItems.Children.Clear();
+            var row1 = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
             if (kind == "3d" && Surface.Solid3D != null)
             {
                 var s3 = Surface.Solid3D;
-                ContextMenuItems.Children.Add(MakeCtxBtn("✥ Di chuyển", () => Surface.SetTool("select"), "#1D4ED8"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🔄 Xoay 3D", () => Surface.SetTool("orbit_3d"), "#7C3AED"));
-                ContextMenuItems.Children.Add(MakeCtxBtn(s3.IsSolidShaded ? "🧊 Khối đặc ✓" : "📐 Khung dây", () => Surface.ToggleSolid3DShaded(), s3.IsSolidShaded ? "#0F766E" : "#334155"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu khối", () => Surface.CycleSolid3DColor(), s3.SolidColorHex, "#0F172A"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("＋", () => Surface.ScaleSolid3D(1.12)));
-                ContextMenuItems.Children.Add(MakeCtxBtn("－", () => Surface.ScaleSolid3D(0.89)));
+                row1.Children.Add(MakeCtxBtn("✥ Di chuyển", () => Surface.SetTool("select"), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("🔄 Xoay 3D", () => Surface.SetTool("orbit_3d"), "#7C3AED"));
+                row1.Children.Add(MakeCtxBtn(s3.IsSolidShaded ? "🧊 Khối đặc ✓" : "📐 Khung dây", () => Surface.ToggleSolid3DShaded(), s3.IsSolidShaded ? "#0F766E" : "#334155"));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSolid3DColor(), s3.SolidColorHex, "#0F172A"));
+                row1.Children.Add(MakeCtxBtn("＋", () => Surface.ScaleSolid3D(1.12), tooltip: "Phóng to khối 3D"));
+                row1.Children.Add(MakeCtxBtn("－", () => Surface.ScaleSolid3D(0.89), tooltip: "Thu nhỏ khối 3D"));
                 if (s3.Kind == "poly")
                 {
-                    ContextMenuItems.Children.Add(MakeCtxBtn("• Điểm cạnh", () => Surface.SetTool("point_edge_3d")));
-                    ContextMenuItems.Children.Add(MakeCtxBtn("∥ Song song", () => Surface.SetTool("parallel_3d")));
-                    ContextMenuItems.Children.Add(MakeCtxBtn("🔶 Thiết diện", () => Surface.SetTool("section_3d")));
+                    row1.Children.Add(MakeCtxBtn("• Điểm cạnh", () => Surface.SetTool("point_edge_3d")));
+                    row1.Children.Add(MakeCtxBtn("∥ Song song", () => Surface.SetTool("parallel_3d")));
+                    row1.Children.Add(MakeCtxBtn("▱ Mp 3đ", () => Surface.SetTool("plane_3pts_3d"), "#0284C7", tooltip: "Dựng mặt phẳng (P) qua 3 điểm → tự tính thiết diện"));
+                    row1.Children.Add(MakeCtxBtn("▱ Mp //", () => Surface.SetTool("plane_para_3d"), "#0369A1", tooltip: "Dựng mặt phẳng (P) qua 1 điểm // mặt phẳng chuẩn"));
                 }
-                ContextMenuItems.Children.Add(MakeCtxBtn("🗑", () => { Surface.DeleteSolid3D(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                row1.Children.Add(MakeCtxBtn("✂️ Mp cắt", () => Surface.SpawnInteractiveCutPlane3D(), "#B45309", tooltip: "Tạo mặt phẳng cắt (P) tương tác"));
+                row1.Children.Add(MakeCtxBtn("🗑", () => { Surface.DeleteSolid3D(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626", tooltip: "Xóa khối 3D"));
+                ContextMenuItems.Children.Add(row1);
+
+                if (s3.CutPlane != null)
+                {
+                    var row2 = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 0, 0) };
+                    row2.Children.Add(new TextBlock
+                    {
+                        Text = "Mp (P):",
+                        Foreground = new SolidColorBrush(Color.FromRgb(125, 211, 252)),
+                        FontSize = 10.5,
+                        FontWeight = FontWeights.Bold,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(2, 0, 4, 0)
+                    });
+                    row2.Children.Add(MakeCtxBtn("⬆", () => Surface.NudgeCutPlane3D(0.14), "#1E3A8A", tooltip: "Nâng độ cao mặt phẳng (P)"));
+                    row2.Children.Add(MakeCtxBtn("⬇", () => Surface.NudgeCutPlane3D(-0.14), "#1E3A8A", tooltip: "Hạ độ cao mặt phẳng (P)"));
+                    row2.Children.Add(MakeCtxBtn("⟲", () => Surface.TiltCutPlane3D(-12.0), "#4C1D95", tooltip: "Xoay góc nghiêng mặt phẳng (P) trái"));
+                    row2.Children.Add(MakeCtxBtn("⟳", () => Surface.TiltCutPlane3D(12.0), "#4C1D95", tooltip: "Xoay góc nghiêng mặt phẳng (P) phải"));
+                    row2.Children.Add(MakeCtxBtn("⊥ Dọc", () => Surface.SetCutPlaneVertical90(), "#0F766E", tooltip: "Cắt dọc 90° qua trục (HCN / Tam giác cân / Đường tròn lớn)"));
+                    row2.Children.Add(MakeCtxBtn(s3.CutPlane.Visible ? "👁 Ẩn (P)" : "👁 Hiện (P)", () => Surface.ToggleCutPlaneVisible(), "#334155", tooltip: "Bật / tắt hiển thị tấm mặt phẳng (P)"));
+                    row2.Children.Add(MakeCtxBtn("✕ Gỡ (P)", () => Surface.RemoveCutPlane3D(), "#991B1B", tooltip: "Xóa mặt phẳng cắt (P)"));
+                    ContextMenuItems.Children.Add(row2);
+                }
             }
             else if (kind == "2d")
             {
-                ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu nét", () => Surface.CycleSelected2DStrokeColor(), "#1D4ED8"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("┄ Đứt/Liền", () => Surface.ToggleSelected2DDash()));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🪣 Tô miền", () => Surface.FillSelected2DLoop(), "#D97706"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("📋 Nhân bản", () => Surface.DuplicateSelected2D(), "#0F766E"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu nét", () => Surface.CycleSelected2DStrokeColor(), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("┄ Đứt/Liền", () => Surface.ToggleSelected2DDash()));
+                row1.Children.Add(MakeCtxBtn("🪣 Tô miền", () => Surface.FillSelected2DLoop(), "#D97706"));
+                row1.Children.Add(MakeCtxBtn("📋 Nhân bản", () => Surface.DuplicateSelected2D(), "#0F766E"));
+                row1.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                ContextMenuItems.Children.Add(row1);
             }
             else if (kind == "rev" && Surface.RevScene != null)
             {
-                ContextMenuItems.Children.Add(MakeCtxBtn("＋ Cận/Miền", () => Surface.SetTool("add_bound"), "#0EA5E9"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu S", () => Surface.CycleArea2DColor(), Surface.Area2DColorHex));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🌀 Quay 3D (V)", () => { Surface.RevMode = MathRenderMode.Solid3D; Surface.InvalidateVisual(); }, "#7C3AED"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu V", () => Surface.CycleVolume3DColor(), Surface.Volume3DColorHex));
-                ContextMenuItems.Children.Add(MakeCtxBtn("－ Miền", () => Surface.RemoveRevolutionRegion(), "#475569"));
-                ContextMenuItems.Children.Add(MakeCtxBtn("🗑", () => { Surface.RevScene = null; Surface.NotifyMetrics(); Surface.InvalidateVisual(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                row1.Children.Add(MakeCtxBtn("＋ Cận/Miền", () => Surface.SetTool("add_bound"), "#0EA5E9"));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu S", () => Surface.CycleArea2DColor(), Surface.Area2DColorHex));
+                row1.Children.Add(MakeCtxBtn("🌀 Quay 3D (V)", () => { Surface.RevMode = MathRenderMode.Solid3D; Surface.InvalidateVisual(); }, "#7C3AED"));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu V", () => Surface.CycleVolume3DColor(), Surface.Volume3DColorHex));
+                row1.Children.Add(MakeCtxBtn("－ Miền", () => Surface.RemoveRevolutionRegion(), "#475569"));
+                row1.Children.Add(MakeCtxBtn("🗑", () => { Surface.RevScene = null; Surface.NotifyMetrics(); Surface.InvalidateVisual(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                ContextMenuItems.Children.Add(row1);
             }
             else
             {

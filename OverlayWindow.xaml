@@ -19,7 +19,7 @@
                 <Border.Effect>
                     <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.45" Color="Black"/>
                 </Border.Effect>
-                <StackPanel x:Name="ContextMenuItems" Orientation="Horizontal"/>
+                <StackPanel x:Name="ContextMenuItems" Orientation="Vertical"/>
             </Border>
         </Canvas>
     </Grid>

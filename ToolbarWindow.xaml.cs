@@ -49,6 +49,8 @@ namespace ScienceWordOverlay
                     "point_edge_3d" => "Điểm cạnh 3D",
                     "parallel_3d" => "Song song 3D",
                     "section_3d" => "Thiết diện 3D",
+                    "plane_3pts_3d" => "Mp qua 3 điểm",
+                    "plane_para_3d" => "Mp 1đ // mặt",
                     _ => TxtActiveTool.Text
                 };
             };
@@ -187,6 +189,12 @@ namespace ScienceWordOverlay
             Add3DTool("╱ Nối 2 đỉnh thành đoạn 3D", "edge_3d", "Nối cạnh 3D");
             Add3DTool("∥ Dựng song song 3D (MN // AB)", "parallel_3d", "Song song 3D");
             Add3DTool("🔶 Tô Thiết diện 3D (chọn các đỉnh)", "section_3d", "Thiết diện 3D");
+            menu.Items.Add(new Separator());
+            Add3DTool("▱ Mp qua 3 điểm (tự dựng thiết diện)", "plane_3pts_3d", "Mp qua 3 điểm");
+            Add3DTool("▱ Mp qua 1 điểm // mặt (tự dựng thiết diện)", "plane_para_3d", "Mp 1đ // mặt");
+            var miCutPlane = new MenuItem { Header = "✂️ Mp cắt tương tác (Nón / Trụ / Cầu / Đa diện)" };
+            miCutPlane.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SpawnInteractiveCutPlane3D(); };
+            menu.Items.Add(miCutPlane);
             menu.Items.Add(new Separator());
             var miShowRev = new MenuItem { Header = "📊 Bật thanh Tích phân S & Quay tròn xoay V (Word)" };
             miShowRev.Click += (_, _) => { Row3Panel.Visibility = Visibility.Visible; _overlay.Surface.SyncFromOffice(); };
