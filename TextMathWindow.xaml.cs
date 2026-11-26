@@ -15,6 +15,8 @@ namespace ScienceWordOverlay
     public partial class TextMathWindow : Window
     {
         private readonly OverlaySurface _surface;
+        private bool _isReady = false;
+        public bool AllowRealClose { get; set; } = false;
         private string? _editingFormulaId;
         private string _mathColorHex = "#0F172A";
         private double _mathFontSize = 24.0;
@@ -67,12 +69,18 @@ namespace ScienceWordOverlay
 
         public TextMathWindow(OverlaySurface surface)
         {
+            _surface = surface ?? throw new ArgumentNullException(nameof(surface));
             InitializeComponent();
-            _surface = surface;
-            Loaded += (_, _) =>
+            _isReady = true;
+            BuildVkButtons("basic");
+            RefreshPreview();
+            Closing += (_, e) =>
             {
-                BuildVkButtons("basic");
-                RefreshPreview();
+                if (!AllowRealClose)
+                {
+                    e.Cancel = true;
+                    Hide();
+                }
             };
         }
 
@@ -165,7 +173,7 @@ namespace ScienceWordOverlay
 
         private void RefreshPreview()
         {
-            if (ImgMathPreview == null || TxtFormulaInput == null) return;
+            if (!_isReady || ImgMathPreview == null || TxtFormulaInput == null || ChkForceMath == null) return;
             string txt = (TxtFormulaInput.Text ?? "").Trim();
             if (string.IsNullOrEmpty(txt)) { ImgMathPreview.Source = null; return; }
             try
@@ -178,8 +186,8 @@ namespace ScienceWordOverlay
             catch { }
         }
 
-        private void TxtFormulaInput_TextChanged(object sender, TextChangedEventArgs e) => RefreshPreview();
-        private void ChkForceMath_Changed(object sender, RoutedEventArgs e) => RefreshPreview();
+        private void TxtFormulaInput_TextChanged(object sender, TextChangedEventArgs e) { if (_isReady) RefreshPreview(); }
+        private void ChkForceMath_Changed(object sender, RoutedEventArgs e) { if (_isReady) RefreshPreview(); }
         private void BtnClearFormula_Click(object sender, RoutedEventArgs e) { TxtFormulaInput.Text = ""; TxtFormulaInput.Focus(); RefreshPreview(); }
 
         private void MathColor_Click(object sender, RoutedEventArgs e)
@@ -189,6 +197,7 @@ namespace ScienceWordOverlay
 
         private void CbMathFontSize_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isReady) return;
             if (CbMathFontSize?.SelectedItem is ComboBoxItem it && it.Tag is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double sz))
             {
                 _mathFontSize = sz;
@@ -218,6 +227,7 @@ namespace ScienceWordOverlay
         // ================= HANDWRITING PAD (SMOOTH BEZIER) =================
         private void CbPadPenType_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isReady || _surface == null) return;
             if (CbPadPenType?.SelectedItem is ComboBoxItem it && it.Tag is string tag)
             {
                 _padPenStyle = tag;
@@ -227,6 +237,7 @@ namespace ScienceWordOverlay
 
         private void CbPadPenWidth_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isReady || _surface == null) return;
             if (CbPadPenWidth?.SelectedItem is ComboBoxItem it && it.Tag is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double w))
             {
                 _padWidth = w;

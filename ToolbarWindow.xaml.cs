@@ -61,10 +61,17 @@ namespace ScienceWordOverlay
             {
                 EnsureTextMathWindow().OpenForEdit(mf);
             };
-            _overlay.Surface.VerticalSpinStateChanged += spinning =>
+            _overlay.Surface.SpinAxisStateChanged += axis =>
             {
-                if (BtnAutoSpin3D != null) BtnAutoSpin3D.Content = spinning ? "⏸ Dừng" : "▶ Quay";
-                if (BtnRevVertSpin != null) BtnRevVertSpin.Content = spinning ? "⏸ Dừng" : "⟳ Trục đứng";
+                if (BtnAutoSpin3D != null) BtnAutoSpin3D.Content = axis == SpinAxisMode.Vertical ? "⏸ Đứng" : "⟳ Đứng";
+                if (BtnAutoSpinH3D != null) BtnAutoSpinH3D.Content = axis == SpinAxisMode.Horizontal ? "⏸ Ngang" : "⇵ Ngang";
+                if (BtnRevVertSpin != null) BtnRevVertSpin.Content = axis == SpinAxisMode.Vertical ? "⏸ Đứng" : "⟳ Đứng";
+                if (BtnRevHorizSpin != null) BtnRevHorizSpin.Content = axis == SpinAxisMode.Horizontal ? "⏸ Ngang" : "⇵ Ngang";
+            };
+            _overlay.Surface.RevHandlesVisibilityChanged += visible =>
+            {
+                if (ChkRevHandles != null && ChkRevHandles.IsChecked != visible)
+                    ChkRevHandles.IsChecked = visible;
             };
 
             _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
@@ -142,10 +149,10 @@ namespace ScienceWordOverlay
         private void ActivateTool(string tag, string displayName) { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SetTool(tag); TxtActiveTool.Text = displayName; }
         private TextMathWindow EnsureTextMathWindow()
         {
-            if (_textMathWin == null)
+            if (_textMathWin == null || !_textMathWin.IsLoaded && _textMathWin.AllowRealClose)
             {
                 _textMathWin = new TextMathWindow(_overlay.Surface);
-                _textMathWin.Owner = _overlay;
+                try { if (_overlay.IsVisible) _textMathWin.Owner = _overlay; } catch { }
             }
             return _textMathWin;
         }
@@ -154,9 +161,16 @@ namespace ScienceWordOverlay
 
         private void BtnTextMath_Click(object sender, RoutedEventArgs e)
         {
-            if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
-            var w = EnsureTextMathWindow();
-            if (w.IsVisible) w.Hide(); else w.OpenForCreate(penMode: false);
+            try
+            {
+                if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
+                var w = EnsureTextMathWindow();
+                if (w.IsVisible) w.Hide(); else w.OpenForCreate(penMode: false);
+            }
+            catch (Exception ex)
+            {
+                _overlay.Surface.ShowToast("Lỗi mở Text-Math: " + ex.Message, 5000);
+            }
         }
 
         private void BtnQuickPen_Click(object sender, RoutedEventArgs e)
@@ -219,6 +233,12 @@ namespace ScienceWordOverlay
             menu.Items.Add(new Separator());
             Add3DTool("✥ Di chuyển khối 3D (Kéo trái)", "select", "Di chuyển 3D");
             Add3DTool("🔄 Xoay góc nhìn 3D (Kéo chuột)", "orbit_3d", "Xoay 3D");
+            var miSpinV = new MenuItem { Header = _overlay.Surface.IsSpinningVertical3D ? "⏸ Dừng quay quanh trục thẳng đứng" : "⟳ Quay quanh trục thẳng đứng (360°)" };
+            miSpinV.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.ToggleVerticalSpin3D(); };
+            menu.Items.Add(miSpinV);
+            var miSpinH = new MenuItem { Header = _overlay.Surface.IsSpinningHorizontal3D ? "⏸ Dừng quay quanh trục nằm ngang" : "⇵ Quay quanh trục nằm ngang (360°)" };
+            miSpinH.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.ToggleHorizontalSpin3D(); };
+            menu.Items.Add(miSpinH);
             Add3DTool("• Chấm điểm trên cạnh 3D (M ∈ SC)", "point_edge_3d", "Điểm cạnh 3D");
             Add3DTool("╱ Nối 2 đỉnh thành đoạn 3D", "edge_3d", "Nối cạnh 3D");
             Add3DTool("∥ Dựng song song 3D (MN // AB)", "parallel_3d", "Song song 3D");
@@ -285,6 +305,11 @@ namespace ScienceWordOverlay
             _overlay.Surface.ToggleVerticalSpin3D();
         }
 
+        private void BtnAutoSpinH3D_Click(object sender, RoutedEventArgs e)
+        {
+            _overlay.Surface.ToggleHorizontalSpin3D();
+        }
+
         private void BtnRevVertSpin_Click(object sender, RoutedEventArgs e)
         {
             if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
@@ -293,6 +318,16 @@ namespace ScienceWordOverlay
             BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
             BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
             _overlay.Surface.ToggleVerticalSpin3D();
+        }
+
+        private void BtnRevHorizSpin_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
+            if (_overlay.Surface.RevScene == null) return;
+            _overlay.Surface.RevMode = MathRenderMode.Solid3D;
+            BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
+            _overlay.Surface.ToggleHorizontalSpin3D();
         }
 
         private void BtnRevResetSpin_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ResetRevTurntable();
@@ -332,9 +367,10 @@ namespace ScienceWordOverlay
         private void OnRevAnimTick(object? sender, EventArgs e) { double next = SlRevAngle.Value + 5.0; if (next >= 360.0) { next = 360.0; _isAnimatingRev = false; _revAnimTimer.Stop(); BtnRevAnim.Content = "▶ 360°"; } SlRevAngle.Value = next; }
         private void SlRevAngle_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay != null) { _overlay.Surface.RevSweepDeg = e.NewValue; if (TxtRevAngle != null) TxtRevAngle.Text = $"{e.NewValue:0}°"; _overlay.Surface.InvalidateVisual(); } }
         private void ChkRevCaps_Changed(object sender, RoutedEventArgs e) { if (_overlay != null) { _overlay.Surface.RevShowCaps = (sender as CheckBox)?.IsChecked == true; _overlay.Surface.InvalidateVisual(); } }
+        private void ChkRevHandles_Changed(object sender, RoutedEventArgs e) { if (_overlay != null) { _overlay.Surface.SetRevBoundsHandlesVisible((sender as CheckBox)?.IsChecked == true); } }
         private void BtnRevSwap_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.SwapAxisAndCurve()) { _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast("Đã đổi trục quay & đường cong sinh!"); } }
         private void BtnRevClear_Click(object sender, RoutedEventArgs e) { _overlay.Surface.RevScene = null; Row3Panel.Visibility = Visibility.Collapsed; _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _overlay.Surface.SetVerticalSpin3D(false); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); _textMathWin?.Close(); Application.Current.Shutdown(); }
+        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _overlay.Surface.SetSpinAxis3D(SpinAxisMode.None); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); if (_textMathWin != null) { _textMathWin.AllowRealClose = true; _textMathWin.Close(); } Application.Current.Shutdown(); }
     }
 }

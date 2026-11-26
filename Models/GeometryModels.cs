@@ -7,6 +7,7 @@ using System.Windows.Media.Imaging;
 namespace ScienceWordOverlay.Models
 {
     public enum MathRenderMode { Area2D = 0, Solid3D = 1 }
+    public enum SpinAxisMode { None = 0, Vertical = 1, Horizontal = 2 }
 
     public class GeoPoint { public string Id { get; set; } = ""; public double X { get; set; } public double Y { get; set; } public string Label { get; set; } = ""; public double Lx { get; set; } = 10; public double Ly { get; set; } = -18; }
     public class GeoShape { public string Id { get; set; } = ""; public string Type { get; set; } = "segment"; public string P1Id { get; set; } = ""; public string P2Id { get; set; } = ""; public string ColorHex { get; set; } = "#0F172A"; public double StrokeWidth { get; set; } = 2.4; public string DashStyle { get; set; } = "solid"; }
@@ -277,8 +278,9 @@ namespace ScienceWordOverlay.Models
             double y1 = y0;
             double z1 = -x0 * sinY + z0 * cosY;
 
-            // 2. Nghieng nhe theo goc Pitch (mac dinh +12 deg khi dang quay de thay ro chieu sau 3D)
-            double rx = (TurntablePitchDeg + 10.0) * Math.PI / 180.0;
+            // 2. Quay quanh truc nam ngang (Pitch) — them do nghieng nhe 8 deg chi khi quay truc dung thuan tuy
+            double tiltOffset = Math.Abs(TurntablePitchDeg) < 0.05 ? 8.0 * Math.Min(1.0, Math.Abs(TurntableYawDeg) / 15.0) : 0.0;
+            double rx = (TurntablePitchDeg + tiltOffset) * Math.PI / 180.0;
             double cosX = Math.Cos(rx), sinX = Math.Sin(rx);
             double y2 = y1 * cosX - z1 * sinX;
             double z2 = y1 * sinX + z1 * cosX;
@@ -306,7 +308,8 @@ namespace ScienceWordOverlay.Models
             double x1 = nx * cosY + nz * sinY;
             double y1 = ny;
             double z1 = -nx * sinY + nz * cosY;
-            double rx = (TurntablePitchDeg + 10.0) * Math.PI / 180.0;
+            double tiltOffset = Math.Abs(TurntablePitchDeg) < 0.05 ? 8.0 * Math.Min(1.0, Math.Abs(TurntableYawDeg) / 15.0) : 0.0;
+            double rx = (TurntablePitchDeg + tiltOffset) * Math.PI / 180.0;
             double cosX = Math.Cos(rx), sinX = Math.Sin(rx);
             return (x1, y1 * cosX - z1 * sinX, y1 * sinX + z1 * cosX);
         }

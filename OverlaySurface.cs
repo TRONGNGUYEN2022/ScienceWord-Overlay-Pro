@@ -21,7 +21,8 @@ namespace ScienceWordOverlay
         public event Action<string, Point?>? ContextMenuRequested;
         public event Action<string>? ActiveToolChanged;
         public event Action<GeoMathFormula>? MathFormulaEditRequested;
-        public event Action<bool>? VerticalSpinStateChanged;
+        public event Action<SpinAxisMode>? SpinAxisStateChanged;
+        public event Action<bool>? RevHandlesVisibilityChanged;
 
         public SceneState Scene { get; private set; } = new();
         public List<MagicFillLayer> MagicFills { get; } = new();
@@ -41,14 +42,17 @@ namespace ScienceWordOverlay
         public double RevSweepDeg { get; set; } = 360.0;
         public double RevXCompression { get; set; } = 0.28;
         public bool RevShowCaps { get; set; } = true;
+        public bool RevShowBoundsHandles { get; set; } = true;
         public bool RevShowAreaIn3D { get; set; } = true;
         public string Area2DColorHex { get; set; } = "#EF4444";
         public string Volume3DColorHex { get; set; } = "#3B82F6";
         private int _dragRevRegionIdx = -1;
         private bool _dragRevIsEnd = false;
         private bool _isOrbitingRev3D = false;
-        private readonly DispatcherTimer _verticalSpinTimer;
-        public bool IsSpinningVertical3D { get; private set; } = false;
+        private readonly DispatcherTimer _spin3DAxisTimer;
+        public SpinAxisMode ActiveSpinAxis { get; private set; } = SpinAxisMode.None;
+        public bool IsSpinningVertical3D => ActiveSpinAxis == SpinAxisMode.Vertical;
+        public bool IsSpinningHorizontal3D => ActiveSpinAxis == SpinAxisMode.Horizontal;
 
         private static readonly string[] VolumePalette = { "#3B82F6", "#06B6D4", "#10B981", "#8B5CF6", "#F59E0B" };
         private static readonly string[] AreaPalette   = { "#EF4444", "#38BDF8", "#FACC15", "#FB923C", "#34D399", "#EC4899" };
@@ -137,54 +141,79 @@ namespace ScienceWordOverlay
             _animDrawTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _animDrawTimer.Tick += OnAnimDrawTick;
 
-            _verticalSpinTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-            _verticalSpinTimer.Tick += OnVerticalSpinTick;
+            _spin3DAxisTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _spin3DAxisTimer.Tick += OnSpin3DAxisTick;
         }
 
-        private void OnVerticalSpinTick(object? sender, EventArgs e)
+        private void OnSpin3DAxisTick(object? sender, EventArgs e)
         {
+            if (ActiveSpinAxis == SpinAxisMode.None) { _spin3DAxisTimer.Stop(); return; }
             bool any = false;
             if (Solid3D != null)
             {
-                Solid3D.YawDeg = (Solid3D.YawDeg + 1.35) % 360.0;
+                if (ActiveSpinAxis == SpinAxisMode.Vertical)
+                    Solid3D.YawDeg = (Solid3D.YawDeg + 1.35) % 360.0;
+                else if (ActiveSpinAxis == SpinAxisMode.Horizontal)
+                    Solid3D.PitchDeg = (Solid3D.PitchDeg + 1.35) % 360.0;
                 any = true;
             }
             if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Solid3D)
             {
-                RevScene.TurntableYawDeg = (RevScene.TurntableYawDeg + 1.45) % 360.0;
+                if (ActiveSpinAxis == SpinAxisMode.Vertical)
+                    RevScene.TurntableYawDeg = (RevScene.TurntableYawDeg + 1.45) % 360.0;
+                else if (ActiveSpinAxis == SpinAxisMode.Horizontal)
+                    RevScene.TurntablePitchDeg = (RevScene.TurntablePitchDeg + 1.45) % 360.0;
                 any = true;
             }
-            if (!any) { SetVerticalSpin3D(false); return; }
+            if (!any) { SetSpinAxis3D(SpinAxisMode.None); return; }
             InvalidateVisual();
         }
 
-        public void SetVerticalSpin3D(bool enabled)
+        public void SetSpinAxis3D(SpinAxisMode mode)
         {
-            if (enabled && Solid3D == null && (RevScene == null || !RevScene.IsValid))
+            if (mode != SpinAxisMode.None && Solid3D == null && (RevScene == null || !RevScene.IsValid))
             {
-                ShowToast("Hãy tạo 1 khối 3D hoặc bật [Quay V] khối tròn xoay trước khi quay trục đứng!");
+                ShowToast("Hãy tạo 1 khối 3D từ [Vẽ 3D ▾] hoặc bật [Quay V] khối tròn xoay trước!");
                 return;
             }
-            if (enabled && Solid3D == null && RevScene != null && RevScene.IsValid && RevMode != MathRenderMode.Solid3D)
+            if (mode != SpinAxisMode.None && Solid3D == null && RevScene != null && RevScene.IsValid && RevMode != MathRenderMode.Solid3D)
             {
                 RevMode = MathRenderMode.Solid3D;
                 if (RevSweepDeg < 30.0) RevSweepDeg = 360.0;
             }
-            IsSpinningVertical3D = enabled;
-            if (enabled) _verticalSpinTimer.Start(); else _verticalSpinTimer.Stop();
-            VerticalSpinStateChanged?.Invoke(enabled);
+            ActiveSpinAxis = mode;
+            if (mode != SpinAxisMode.None) _spin3DAxisTimer.Start(); else _spin3DAxisTimer.Stop();
+            SpinAxisStateChanged?.Invoke(mode);
             if (Solid3D != null) RefreshSolid3DMenu();
             else if (RevScene != null && RevScene.IsValid) RefreshRevMenu();
             InvalidateVisual();
-            ShowToast(enabled ? "🔄 Đang quay khối 3D quanh trục thẳng đứng (nhấn lần nữa để dừng)!" : "⏸ Đã dừng quay trục đứng.");
+            ShowToast(mode switch
+            {
+                SpinAxisMode.Vertical => "⟳ Đang quay khối 3D quanh TRỤC THẲNG ĐỨNG (bấm lại để dừng)!",
+                SpinAxisMode.Horizontal => "⇵ Đang quay khối 3D quanh TRỤC NẰM NGANG (bấm lại để dừng)!",
+                _ => "⏸ Đã dừng quay khối 3D."
+            });
         }
 
-        public void ToggleVerticalSpin3D() => SetVerticalSpin3D(!IsSpinningVertical3D);
+        public void ToggleVerticalSpin3D() => SetSpinAxis3D(ActiveSpinAxis == SpinAxisMode.Vertical ? SpinAxisMode.None : SpinAxisMode.Vertical);
+        public void ToggleHorizontalSpin3D() => SetSpinAxis3D(ActiveSpinAxis == SpinAxisMode.Horizontal ? SpinAxisMode.None : SpinAxisMode.Horizontal);
+        public void SetVerticalSpin3D(bool enabled) => SetSpinAxis3D(enabled ? SpinAxisMode.Vertical : SpinAxisMode.None);
+
+        public void SetRevBoundsHandlesVisible(bool visible)
+        {
+            RevShowBoundsHandles = visible;
+            RevHandlesVisibilityChanged?.Invoke(visible);
+            if (RevScene != null && RevScene.IsValid) RefreshRevMenu();
+            InvalidateVisual();
+            ShowToast(visible ? "👁 Đã hiện các nút cận (a, b, c...) trên trục" : "👁 Đã ẩn các nút cận (màu cam) trên trục!");
+        }
+
+        public void ToggleRevBoundsHandles() => SetRevBoundsHandlesVisible(!RevShowBoundsHandles);
 
         public void ResetRevTurntable()
         {
             if (RevScene == null) return;
-            if (Solid3D == null && IsSpinningVertical3D) SetVerticalSpin3D(false);
+            if (Solid3D == null && ActiveSpinAxis != SpinAxisMode.None) SetSpinAxis3D(SpinAxisMode.None);
             RevScene.TurntableYawDeg = 0.0;
             RevScene.TurntablePitchDeg = 0.0;
             InvalidateVisual();
@@ -1259,6 +1288,7 @@ namespace ScienceWordOverlay
                 RevScene.EnsureRegionsInitialized();
                 if (Tool == "add_bound")
                 {
+                    if (!RevShowBoundsHandles) SetRevBoundsHandlesVisible(true);
                     double dx = pos.X - RevScene.AxisOrigin.X, dy = pos.Y - RevScene.AxisOrigin.Y;
                     double t = dx * RevScene.AxisU.X + dy * RevScene.AxisU.Y;
                     int idx = RevScene.AddOrSplitAt(t);
@@ -1267,8 +1297,9 @@ namespace ScienceWordOverlay
                     return;
                 }
 
-                // Kiểm tra kéo chốt cận trái/phải của từng miền
+                // Kiểm tra kéo chốt cận trái/phải của từng miền (chỉ bắt khi đang hiện nút cận)
                 int bestReg = -1; bool bestIsEnd = false; double bestD = 15.0;
+                if (RevShowBoundsHandles)
                 for (int i = 0; i < RevScene.Regions.Count; i++)
                 {
                     var rg = RevScene.Regions[i];
@@ -1933,8 +1964,8 @@ namespace ScienceWordOverlay
             // 0.45 Khối 3D thực (Nón/Trụ/Cầu nét đứt chuẩn + Chóp/Lăng trụ)
             if (Solid3D != null) RenderSolid3D(dc, Solid3D, cleanExport, dpi);
 
-            // 0.5 Khung nhận diện đối tượng Office (ẩn khi export)
-            if (!cleanExport && OfficeContext != null && OfficeContext.ScreenBoundsDip.Width > 2)
+            // 0.5 Khung nhận diện đối tượng Office (ẩn khi export hoặc khi người dùng chọn ẩn nút cận)
+            if (!cleanExport && OfficeContext != null && OfficeContext.ScreenBoundsDip.Width > 2 && (RevScene == null || RevShowBoundsHandles))
                 dc.DrawRectangle(null, new Pen(new SolidColorBrush(ParseColor("#10B981", 0.75)), 1.4) { DashStyle = DashStyles.Dash }, OfficeContext.ScreenBoundsDip);
 
             // 1. Miền tô màu & Tô góc
@@ -2284,15 +2315,27 @@ namespace ScienceWordOverlay
             var lblTf = new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
             Color lblCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard) ? Colors.White : Color.FromRgb(15, 23, 42);
 
-            if (!cleanExport && IsSpinningVertical3D)
+            if (!cleanExport && ActiveSpinAxis != SpinAxisMode.None)
             {
-                Point pTopAxis = s.Project(new Vec3(0, 1.65, 0), out _);
-                Point pBotAxis = s.Project(new Vec3(0, -1.35, 0), out _);
-                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(150, 56, 189, 248)), 1.35) { DashStyle = DashStyles.Dash }, pBotAxis, pTopAxis);
-                double yawNorm = ((s.YawDeg % 360.0) + 360.0) % 360.0;
-                var ftSpin = new FormattedText($"⟳ {yawNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal), 11.5, new SolidColorBrush(Color.FromRgb(56, 189, 248)), dpi);
-                dc.DrawText(ftSpin, new Point(pTopAxis.X + 6, pTopAxis.Y - 6));
+                var spinTf = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+                if (ActiveSpinAxis == SpinAxisMode.Vertical)
+                {
+                    Point pTopAxis = new(s.CenterScreen.X, s.CenterScreen.Y - s.Scale * 1.45);
+                    Point pBotAxis = new(s.CenterScreen.X, s.CenterScreen.Y + s.Scale * 1.35);
+                    dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(165, 56, 189, 248)), 1.4) { DashStyle = DashStyles.Dash }, pBotAxis, pTopAxis);
+                    double yawNorm = ((s.YawDeg % 360.0) + 360.0) % 360.0;
+                    var ftSpin = new FormattedText($"⟳ Trục đứng: {yawNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, spinTf, 11.5, new SolidColorBrush(Color.FromRgb(2, 132, 199)), dpi);
+                    dc.DrawText(ftSpin, new Point(pTopAxis.X + 8, pTopAxis.Y - 6));
+                }
+                else if (ActiveSpinAxis == SpinAxisMode.Horizontal)
+                {
+                    Point pLeftAxis = new(s.CenterScreen.X - s.Scale * 1.55, s.CenterScreen.Y);
+                    Point pRightAxis = new(s.CenterScreen.X + s.Scale * 1.55, s.CenterScreen.Y);
+                    dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(175, 249, 115, 22)), 1.4) { DashStyle = DashStyles.Dash }, pLeftAxis, pRightAxis);
+                    double pitchNorm = ((s.PitchDeg % 360.0) + 360.0) % 360.0;
+                    var ftSpin = new FormattedText($"⇵ Trục ngang: {pitchNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, spinTf, 11.5, new SolidColorBrush(Color.FromRgb(234, 88, 12)), dpi);
+                    dc.DrawText(ftSpin, new Point(pRightAxis.X - ftSpin.Width, pRightAxis.Y - 20));
+                }
             }
 
             void Draw3DLabel(Vec3 p3, string lbl, bool dot = true)
@@ -2716,14 +2759,25 @@ namespace ScienceWordOverlay
                 }
                 if (RevShowAreaIn3D || RevSweepDeg < 1.0)
                     foreach (var rg in s.Regions) if (rg.Enabled) DrawPlanarSlice(rg.StartT, rg.EndT, rg.ColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false, use3D: s.HasTurntableRotation);
-                if (!cleanExport && (s.HasTurntableRotation || IsSpinningVertical3D))
+                if (!cleanExport && (s.HasTurntableRotation || ActiveSpinAxis != SpinAxisMode.None))
                 {
                     Point pv = s.GetPivotScreenCenter();
-                    var axisPen = new Pen(new SolidColorBrush(Color.FromArgb(145, 56, 189, 248)), 1.3) { DashStyle = DashStyles.Dash };
-                    dc.DrawLine(axisPen, new Point(pv.X, pv.Y - 115), new Point(pv.X, pv.Y + 115));
-                    double angNorm = ((s.TurntableYawDeg % 360.0) + 360.0) % 360.0;
-                    var ftYaw = new FormattedText($"⟳ Trục đứng: {angNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 11.5, new SolidColorBrush(Color.FromRgb(2, 132, 199)), dpi);
-                    dc.DrawText(ftYaw, new Point(pv.X + 8, pv.Y - 112));
+                    if (ActiveSpinAxis == SpinAxisMode.Horizontal || (ActiveSpinAxis == SpinAxisMode.None && Math.Abs(s.TurntablePitchDeg % 360.0) > 0.1 && Math.Abs(s.TurntableYawDeg % 360.0) < 0.1))
+                    {
+                        var hPen = new Pen(new SolidColorBrush(Color.FromArgb(165, 249, 115, 22)), 1.35) { DashStyle = DashStyles.Dash };
+                        dc.DrawLine(hPen, new Point(pv.X - 135, pv.Y), new Point(pv.X + 135, pv.Y));
+                        double angNorm = ((s.TurntablePitchDeg % 360.0) + 360.0) % 360.0;
+                        var ftP = new FormattedText($"⇵ Trục ngang: {angNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 11.5, new SolidColorBrush(Color.FromRgb(234, 88, 12)), dpi);
+                        dc.DrawText(ftP, new Point(pv.X + 14, pv.Y - 22));
+                    }
+                    else
+                    {
+                        var axisPen = new Pen(new SolidColorBrush(Color.FromArgb(145, 56, 189, 248)), 1.3) { DashStyle = DashStyles.Dash };
+                        dc.DrawLine(axisPen, new Point(pv.X, pv.Y - 115), new Point(pv.X, pv.Y + 115));
+                        double angNorm = ((s.TurntableYawDeg % 360.0) + 360.0) % 360.0;
+                        var ftYaw = new FormattedText($"⟳ Trục đứng: {angNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 11.5, new SolidColorBrush(Color.FromRgb(2, 132, 199)), dpi);
+                        dc.DrawText(ftYaw, new Point(pv.X + 8, pv.Y - 112));
+                    }
                 }
             }
 
@@ -2736,8 +2790,8 @@ namespace ScienceWordOverlay
                 dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(14, 165, 233)), new Pen(Brushes.White, 1.5), pAxis, 6.5, 6.5);
             }
 
-            // Ve cap chot can DOC LAP [a, b], [c, d]... cho tung mien
-            if (!cleanExport)
+            // Ve cap chot can DOC LAP [a, b], [c, d]... cho tung mien (cho phep an gon khi trinh chieu)
+            if (!cleanExport && RevShowBoundsHandles)
             {
                 for (int i = 0; i < s.Regions.Count; i++)
                 {

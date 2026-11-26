@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 
 namespace ScienceWordOverlay
@@ -7,14 +8,29 @@ namespace ScienceWordOverlay
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
-            var overlay = new OverlayWindow();
+
+            OverlayWindow? overlay = null;
+            DispatcherUnhandledException += (_, exArgs) =>
+            {
+                exArgs.Handled = true;
+                try
+                {
+                    if (overlay != null)
+                        overlay.Surface.ShowToast("Lỗi thao tác: " + exArgs.Exception.Message, 5000);
+                    else
+                        MessageBox.Show(exArgs.Exception.Message, "ScienceWord Overlay Pro", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch { }
+            };
+
+            overlay = new OverlayWindow();
             overlay.Show();
 
             var toolbar = new ToolbarWindow(overlay);
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.3 (Quay 3D trục thẳng đứng + Bút viết mịn đa chất liệu + Text-Math LaTeX + Mặt phẳng cắt (P) + Chèn App 2 chiều) (Tọa độ tương đối theo màn hình) (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.4 (Fix Text-Math + Ẩn nút cận cam + Quay 3D Trục Đứng & Trục Ngang + Mặt phẳng cắt (P) + Bút viết mịn) sẵn sàng!");
         }
     }
 }
