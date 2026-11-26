@@ -117,6 +117,17 @@ namespace ScienceWordOverlay
             }
         }
 
+        private void CbPenType_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_overlay == null) return;
+            if (CbPenType.SelectedItem is ComboBoxItem item && item.Tag is string ps)
+            {
+                _overlay.Surface.PenTipStyle = ps;
+                _overlay.Surface.ShowToast($"Đã chọn loại bút: {item.Content}");
+                _overlay.Surface.InvalidateVisual();
+            }
+        }
+
         private void CbWidth_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_overlay == null) return;

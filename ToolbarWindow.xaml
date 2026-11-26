@@ -80,7 +80,7 @@
         <StackPanel>
             <!-- HANG 1: CONG CU VE + SNIPPING TOOL + DUA THAN -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="⋮⋮ W² v5" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
+                <TextBlock Text="⋮⋮ W² v6" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
                            VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll"
                            MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
 
@@ -125,6 +125,14 @@
                 <Button Width="16" Height="16" Margin="1,0" Background="#DC2626" BorderBrush="White" Tag="#DC2626" Click="StrokeColor_Click"/>
                 <Button Width="16" Height="16" Margin="1,0" Background="#059669" BorderBrush="White" Tag="#059669" Click="StrokeColor_Click"/>
                 <Button Width="16" Height="16" Margin="1,0,5,0" Background="#FFFFFF" BorderBrush="#94A3B8" Tag="#FFFFFF" Click="StrokeColor_Click"/>
+
+                                <ComboBox x:Name="CbPenType" Width="76" Margin="0,0,5,0" SelectedIndex="0" SelectionChanged="CbPenType_SelectionChanged" FontSize="10.8" ToolTip="Chọn loại bút mô phỏng khi vẽ tay">
+                    <ComboBoxItem Content="Bút bi" Tag="solid"/>
+                    <ComboBoxItem Content="Bút chì" Tag="pencil"/>
+                    <ComboBoxItem Content="Bút cọ" Tag="brush"/>
+                    <ComboBoxItem Content="Nét đứt" Tag="dash"/>
+                    <ComboBoxItem Content="Dạ quang" Tag="highlighter"/>
+                </ComboBox>
 
                 <ComboBox x:Name="CbWidth" Width="50" Margin="0,0,5,0" SelectedIndex="1" SelectionChanged="CbWidth_SelectionChanged" FontSize="10.8">
                     <ComboBoxItem Content="1.5" Tag="1.5"/>

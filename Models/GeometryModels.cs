@@ -60,6 +60,8 @@ namespace ScienceWordOverlay.Models
         public double Width { get; set; } = 2.5;
         public double Opacity { get; set; } = 1.0;
         public bool IsHighlighter { get; set; } = false;
+        public string PenStyle { get; set; } = "solid"; // solid | pencil | brush | dash | highlighter
+        public List<double> PointWidths { get; set; } = new();
     }
 
     public class GeoText

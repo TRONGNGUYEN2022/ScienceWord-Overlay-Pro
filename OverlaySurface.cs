@@ -47,6 +47,7 @@ namespace ScienceWordOverlay
         public string StrokeColorHex { get; set; } = "#0F172A";
         public double StrokeWidth { get; set; } = 2.4;
         public string StrokeDash { get; set; } = "solid";
+        public string PenTipStyle { get; set; } = "solid"; // solid | pencil | brush | dash | highlighter
         public string FillColorHex { get; set; } = "#3B82F6";
         public double FillOpacity { get; set; } = 0.40;
         public string FillPattern { get; set; } = "solid";
@@ -460,7 +461,8 @@ namespace ScienceWordOverlay
                 encoder.Frames.Add(BitmapFrame.Create(bmp));
                 using (var fs = File.Create(tempPath)) encoder.Save(fs);
 
-                if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, Scene, out _))
+                var dpi = VisualTreeHelper.GetDpi(this);
+                if (OfficeComBridge.InsertPngToOffice(OfficeContext, LastTargetProcName, tempPath, bbox.Value, Scene, dpi.DpiScaleX, dpi.DpiScaleY, out _))
                 {
                     ShowToast($"Đã chèn khớp tọa độ vào {Win32Helper.FriendlyAppName(LastTargetProcName)}!");
                     return;
@@ -696,9 +698,20 @@ namespace ScienceWordOverlay
             if (Tool is "pen" or "highlighter")
             {
                 SaveHistory();
-                bool isHl = Tool == "highlighter";
-                _activeStroke = new FreeStroke { Id = GenId("strk"), ColorHex = isHl ? FillColorHex : StrokeColorHex, Width = isHl ? 20.0 : Math.Max(2.0, StrokeWidth), Opacity = isHl ? 0.35 : 1.0, IsHighlighter = isHl };
+                string pStyle = Tool == "highlighter" ? "highlighter" : PenTipStyle;
+                bool isHl = pStyle == "highlighter";
+                double baseW = isHl ? Math.Max(16.0, StrokeWidth * 5.0) : Math.Max(1.6, StrokeWidth);
+                _activeStroke = new FreeStroke
+                {
+                    Id = GenId("strk"),
+                    ColorHex = isHl ? FillColorHex : StrokeColorHex,
+                    Width = baseW,
+                    Opacity = isHl ? 0.36 : (pStyle == "pencil" ? 0.82 : 1.0),
+                    IsHighlighter = isHl,
+                    PenStyle = pStyle
+                };
                 _activeStroke.Points.Add(new[] { pos.X, pos.Y });
+                _activeStroke.PointWidths.Add(baseW);
                 Scene.Strokes.Add(_activeStroke);
                 CaptureMouse(); InvalidateVisual(); return;
             }
@@ -867,10 +880,22 @@ namespace ScienceWordOverlay
             if (_activeStroke != null)
             {
                 var last = _activeStroke.Points[^1];
-                if (Hypot(pos.X - last[0], pos.Y - last[1]) >= 2.0) _activeStroke.Points.Add(new[] { pos.X, pos.Y });
+                double d = Hypot(pos.X - last[0], pos.Y - last[1]);
+                if (d >= 1.8)
+                {
+                    _activeStroke.Points.Add(new[] { pos.X, pos.Y });
+                    double w = _activeStroke.Width;
+                    if (_activeStroke.PenStyle == "brush")
+                    {
+                        double prevW = _activeStroke.PointWidths.Count > 0 ? _activeStroke.PointWidths[^1] : w;
+                        double targetW = Math.Clamp(w * (1.75 - Math.Min(1.2, d / 18.0)), Math.Max(1.0, w * 0.35), w * 2.1);
+                        w = prevW * 0.6 + targetW * 0.4;
+                    }
+                    _activeStroke.PointWidths.Add(w);
+                }
                 InvalidateVisual(); return;
             }
-            if (_stepPoints.Count > 0) InvalidateVisual();
+            if (_stepPoints.Count > 0 || Tool is "pen" or "highlighter") InvalidateVisual();
         }
 
         protected override void OnMouseUp(MouseButtonEventArgs e)
@@ -1075,11 +1100,23 @@ namespace ScienceWordOverlay
                 else dc.DrawLine(pen, pt1, pt2);
             }
 
-            // 4. Nét vẽ tay & Dạ quang
+            // 4. Nét vẽ tay đa chất liệu (Bút bi, Bút chì, Bút cọ thư pháp, Nét đứt, Dạ quang)
             foreach (var st in Scene.Strokes)
             {
                 if (st.Points.Count < 2) continue;
-                var pen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, st.Opacity)), st.Width) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                string pStyle = st.IsHighlighter ? "highlighter" : (st.PenStyle ?? "solid");
+
+                if (pStyle == "brush" && st.PointWidths.Count == st.Points.Count)
+                {
+                    var br = new SolidColorBrush(ParseColor(st.ColorHex, st.Opacity));
+                    for (int i = 0; i < st.Points.Count - 1; i++)
+                    {
+                        var segPen = new Pen(br, Math.Max(1.0, st.PointWidths[i])) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                        dc.DrawLine(segPen, new Point(st.Points[i][0], st.Points[i][1]), new Point(st.Points[i + 1][0], st.Points[i + 1][1]));
+                    }
+                    continue;
+                }
+
                 var geo = new StreamGeometry();
                 using (var ctx = geo.Open())
                 {
@@ -1088,7 +1125,26 @@ namespace ScienceWordOverlay
                         ctx.QuadraticBezierTo(new Point(st.Points[i][0], st.Points[i][1]), new Point((st.Points[i][0] + st.Points[i + 1][0]) / 2.0, (st.Points[i][1] + st.Points[i + 1][1]) / 2.0), true, false);
                     ctx.LineTo(new Point(st.Points[^1][0], st.Points[^1][1]), true, false);
                 }
-                geo.Freeze(); dc.DrawGeometry(null, pen, geo);
+                geo.Freeze();
+
+                if (pStyle == "pencil")
+                {
+                    var softPen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.28)), st.Width * 1.65) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                    var corePen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.85)), Math.Max(1.1, st.Width * 0.82)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                    dc.DrawGeometry(null, softPen, geo);
+                    dc.DrawGeometry(null, corePen, geo);
+                }
+                else
+                {
+                    var pen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, st.Opacity)), st.Width)
+                    {
+                        StartLineCap = pStyle == "highlighter" ? PenLineCap.Flat : PenLineCap.Round,
+                        EndLineCap = pStyle == "highlighter" ? PenLineCap.Flat : PenLineCap.Round,
+                        LineJoin = PenLineJoin.Round
+                    };
+                    if (pStyle == "dash") pen.DashStyle = new DashStyle(new double[] { 4.8, 3.2 }, 0);
+                    dc.DrawGeometry(null, pen, geo);
+                }
             }
 
             // 5. Chữ
@@ -1141,6 +1197,12 @@ namespace ScienceWordOverlay
                     geo.Freeze(); dc.DrawGeometry(snipFill, snipPen, geo);
                 }
                 if (_stepPoints.Count > 0) DrawLivePreviewAndTools(dc, dpi);
+                if (ShowVirtualTools && (Tool is "pen" or "highlighter") && _mousePos.X > 1 && _mousePos.Y > 1)
+                {
+                    string vStyle = Tool == "highlighter" ? "highlighter" : PenTipStyle;
+                    Color vCol = ParseColor(vStyle == "highlighter" ? FillColorHex : StrokeColorHex, 1.0);
+                    DrawVirtualPen(dc, _mousePos, vCol, vStyle, _activeStroke != null);
+                }
             }
         }
 
@@ -1289,6 +1351,65 @@ namespace ScienceWordOverlay
                 geo.Freeze();
                 dc.DrawGeometry((Tool == "fill_area" && pts.Count >= 3) ? MakeRegionBrush(FillColorHex, FillOpacity, FillPattern) : null, prevPen, geo);
             }
+        }
+
+
+        private static void DrawVirtualPen(DrawingContext dc, Point tip, Color penCol, string style, bool isPressed)
+        {
+            dc.PushTransform(new TranslateTransform(tip.X, tip.Y));
+            dc.PushTransform(new RotateTransform(isPressed ? -36.0 : -45.0));
+
+            // Chấm sáng ngay đầu ngòi bút
+            dc.DrawEllipse(new SolidColorBrush(Color.FromArgb((byte)(isPressed ? 235 : 170), penCol.R, penCol.G, penCol.B)),
+                new Pen(Brushes.White, 1.3), new Point(0, 0), 3.6, 3.6);
+
+            if (style == "highlighter")
+            {
+                var nib = new StreamGeometry();
+                using (var ctx = nib.Open()) { ctx.BeginFigure(new Point(0, 0), true, true); ctx.PolyLineTo(new[] { new Point(9, -6), new Point(13, 3), new Point(4, 5) }, true, false); }
+                nib.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(230, penCol.R, penCol.G, penCol.B)), null, nib);
+                dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(240, 250, 204, 21)), new Pen(new SolidColorBrush(Color.FromRgb(51, 65, 85)), 1.3), new Rect(10, -8, 44, 15), 2, 2);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(230, penCol.R, penCol.G, penCol.B)), null, new Rect(16, -6, 26, 11));
+            }
+            else if (style == "pencil")
+            {
+                var wood = new StreamGeometry();
+                using (var ctx = wood.Open()) { ctx.BeginFigure(new Point(0, 0), true, true); ctx.PolyLineTo(new[] { new Point(13, -5), new Point(13, 5) }, true, false); }
+                wood.Freeze();
+                var lead = new StreamGeometry();
+                using (var ctx = lead.Open()) { ctx.BeginFigure(new Point(0, 0), true, true); ctx.PolyLineTo(new[] { new Point(5, -2), new Point(5, 2) }, true, false); }
+                lead.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(245, 208, 155)), null, wood);
+                dc.DrawGeometry(new SolidColorBrush(penCol), null, lead);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(234, 179, 8)), new Pen(new SolidColorBrush(Color.FromRgb(71, 85, 105)), 1.1), new Rect(13, -5, 42, 10));
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(203, 213, 225)), null, new Rect(55, -5, 6, 10));
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(244, 114, 182)), null, new Rect(61, -5, 8, 10));
+            }
+            else if (style == "brush")
+            {
+                var tipGeo = new StreamGeometry();
+                using (var ctx = tipGeo.Open()) { ctx.BeginFigure(new Point(0, 0), true, true); ctx.QuadraticBezierTo(new Point(8, -6), new Point(16, -4), true, false); ctx.LineTo(new Point(16, 4), true, false); ctx.QuadraticBezierTo(new Point(8, 6), new Point(0, 0), true, false); }
+                tipGeo.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(penCol), null, tipGeo);
+                dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromRgb(120, 53, 15)), new Pen(new SolidColorBrush(Color.FromRgb(69, 26, 3)), 1.2), new Rect(16, -4.5, 48, 9), 3, 3);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(251, 191, 36)), null, new Rect(16, -4.5, 5, 9));
+            }
+            else
+            {
+                var cone = new StreamGeometry();
+                using (var ctx = cone.Open()) { ctx.BeginFigure(new Point(0, 0), true, true); ctx.PolyLineTo(new[] { new Point(12, -4.5), new Point(12, 4.5) }, true, false); }
+                cone.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(226, 232, 240)), new Pen(new SolidColorBrush(Color.FromRgb(30, 41, 59)), 1.1), cone);
+                dc.DrawRoundedRectangle(new SolidColorBrush(penCol), new Pen(new SolidColorBrush(Color.FromRgb(15, 23, 42)), 1.2), new Rect(12, -5, 48, 10), 2, 2);
+                if (style == "dash")
+                    dc.DrawLine(new Pen(Brushes.White, 2.0) { DashStyle = DashStyles.Dash }, new Point(18, 0), new Point(52, 0));
+                else
+                    dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(95, 255, 255, 255)), null, new Rect(14, -3.5, 44, 2.5));
+            }
+
+            dc.Pop();
+            dc.Pop();
         }
 
         private static void DrawVirtualRuler(DrawingContext dc, Point a, Point b, double dpi)

@@ -42,7 +42,8 @@ namespace ScienceWordOverlay.Utils
         private const int MsoGroup = 6;
         private const int MsoSegmentCurve = 1;
         private const int MsoTrue = -1;
-        private const string AltPrefix = "SWOV_V5|";
+        private const string AltPrefix = "SWOV_V6|";
+        private const string AltPrefixV5 = "SWOV_V5|";
 
         [DllImport("ole32.dll")]
         private static extern int CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string lpszProgID, out Guid pclsid);
@@ -77,11 +78,23 @@ namespace ScienceWordOverlay.Utils
         }
 
         
-        private class EmbeddedPayload
+        public class EmbeddedPayload
         {
             public double BoxW { get; set; }
             public double BoxH { get; set; }
             public SceneState Scene { get; set; } = new();
+            public MathRenderMode RevMode { get; set; } = MathRenderMode.Area2D;
+            public double RevSweepDeg { get; set; } = 360.0;
+            public string FillColorHex { get; set; } = "#3B82F6";
+            public double FillOpacity { get; set; } = 0.40;
+            public string FillPattern { get; set; } = "solid";
+        }
+
+        private static double GetComIndexedDouble(object comObj, string propName, int index)
+        {
+            object? val = comObj.GetType().InvokeMember(
+                propName, BindingFlags.GetProperty, null, comObj, new object[] { index });
+            return Convert.ToDouble(val);
         }
 
         public static string EncodeSceneToAltText(SceneState scene, Rect screenBoxDip)
@@ -120,7 +133,7 @@ namespace ScienceWordOverlay.Utils
                     dynamic sh = shObj;
                     string alt = "";
                     try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
-                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal) && !alt.StartsWith(AltPrefixV5, StringComparison.Ordinal)) return null;
                     if (!TryWordGetPoint(winObj, shObj, out Rect shPx)) return null;
 
                     return DecodeOverlayImage(alt, OfficeAppKind.Word, shObj, shPx, dpiScaleX, dpiScaleY);
@@ -139,7 +152,7 @@ namespace ScienceWordOverlay.Utils
                     dynamic sh = shObj;
                     string alt = "";
                     try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
-                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal) && !alt.StartsWith(AltPrefixV5, StringComparison.Ordinal)) return null;
 
                     float lPt = Convert.ToSingle(sh.Left), tPt = Convert.ToSingle(sh.Top);
                     float wPt = Convert.ToSingle(sh.Width), hPt = Convert.ToSingle(sh.Height);
@@ -163,7 +176,7 @@ namespace ScienceWordOverlay.Utils
                     dynamic sh = shObj;
                     string alt = "";
                     try { alt = Convert.ToString(sh.AlternativeText) ?? ""; } catch { return null; }
-                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal)) return null;
+                    if (!alt.StartsWith(AltPrefix, StringComparison.Ordinal) && !alt.StartsWith(AltPrefixV5, StringComparison.Ordinal)) return null;
 
                     double lPt = Convert.ToDouble(sh.Left), tPt = Convert.ToDouble(sh.Top);
                     double wPt = Convert.ToDouble(sh.Width), hPt = Convert.ToDouble(sh.Height);
@@ -183,7 +196,7 @@ namespace ScienceWordOverlay.Utils
         {
             try
             {
-                string b64 = alt.Substring(AltPrefix.Length);
+                string b64 = alt.StartsWith(AltPrefix, StringComparison.Ordinal) ? alt.Substring(AltPrefix.Length) : alt.Substring(AltPrefixV5.Length);
                 string json = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
                 var payload = JsonSerializer.Deserialize<EmbeddedPayload>(json);
                 if (payload == null) return null;
@@ -227,7 +240,7 @@ namespace ScienceWordOverlay.Utils
             catch { return null; }
         }
 
-        public static bool InsertPngToOffice(OfficeSelectionContext? ctx, string targetProcName, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
+        public static bool InsertPngToOffice(OfficeSelectionContext? ctx, string targetProcName, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, double dpiScaleX, double dpiScaleY, out string? error)
         {
             OfficeAppKind kind = ctx?.AppKind ?? targetProcName.ToUpperInvariant() switch
             {
@@ -237,9 +250,9 @@ namespace ScienceWordOverlay.Utils
                 _ => OfficeAppKind.None
             };
 
-            if (kind == OfficeAppKind.Word) return InsertPngToWord(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
-            if (kind == OfficeAppKind.PowerPoint) return InsertPngToPowerPoint(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
-            if (kind == OfficeAppKind.Excel) return InsertPngToExcel(ctx, pngPath, screenBoxDip, sceneToEmbed, out error);
+            if (kind == OfficeAppKind.Word) return InsertPngToWord(ctx, pngPath, screenBoxDip, sceneToEmbed, dpiScaleX, dpiScaleY, out error);
+            if (kind == OfficeAppKind.PowerPoint) return InsertPngToPowerPoint(ctx, pngPath, screenBoxDip, sceneToEmbed, dpiScaleX, dpiScaleY, out error);
+            if (kind == OfficeAppKind.Excel) return InsertPngToExcel(ctx, pngPath, screenBoxDip, sceneToEmbed, dpiScaleX, dpiScaleY, out error);
 
             error = "App đích không phải Office COM.";
             return false;
@@ -283,7 +296,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc Word: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToWord(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
+        private static bool InsertPngToWord(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, double dpiScaleX, double dpiScaleY, out string? error)
         {
             error = null;
             object? wordObj = GetActiveComObject("Word.Application");
@@ -292,9 +305,38 @@ namespace ScienceWordOverlay.Utils
             {
                 dynamic wordApp = wordObj;
                 dynamic doc = wordApp.ActiveDocument;
-                double dipPerPt = (ctx != null && ctx.DipPerPt > 0.1) ? ctx.DipPerPt : (96.0 / 72.0);
-                double leftPt = ctx != null ? ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt : 72.0;
-                double topPt = ctx != null ? ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt : 72.0;
+                object winObj = wordApp.ActiveWindow;
+                dynamic win = winObj;
+
+                double zoomPct = 100.0;
+                try { zoomPct = Convert.ToDouble(win.ActivePane.View.Zoom.Percentage); } catch { }
+                double dipPerPt = (ctx != null && ctx.DipPerPt > 0.1) ? ctx.DipPerPt : (96.0 / 72.0) * (zoomPct / 100.0);
+                double leftPt = 72.0, topPt = 72.0;
+
+                if (ctx != null)
+                {
+                    leftPt = ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt;
+                    topPt = ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt;
+                }
+                else
+                {
+                    // Tự ánh xạ đúng tọa độ màn hình sang trang Word qua vị trí con trỏ (caret) hiện tại
+                    try
+                    {
+                        object selRangeObj = wordApp.Selection.Range;
+                        if (TryWordGetPoint(winObj, selRangeObj, out Rect caretPx))
+                        {
+                            double caretXPt = GetComIndexedDouble(selRangeObj, "Information", 5);
+                            double caretYPt = GetComIndexedDouble(selRangeObj, "Information", 6);
+                            double caretDipX = caretPx.Left / dpiScaleX;
+                            double caretDipY = caretPx.Top / dpiScaleY;
+                            leftPt = caretXPt + (screenBoxDip.Left - caretDipX) / dipPerPt;
+                            topPt = caretYPt + (screenBoxDip.Top - caretDipY) / dipPerPt;
+                        }
+                    }
+                    catch { }
+                }
+
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
@@ -372,7 +414,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc PowerPoint: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToPowerPoint(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
+        private static bool InsertPngToPowerPoint(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, double dpiScaleX, double dpiScaleY, out string? error)
         {
             error = null;
             object? pptObj = GetActiveComObject("PowerPoint.Application");
@@ -380,10 +422,30 @@ namespace ScienceWordOverlay.Utils
             try
             {
                 dynamic pptApp = pptObj;
-                dynamic slide = pptApp.ActiveWindow.View.Slide;
+                dynamic win = pptApp.ActiveWindow;
+                dynamic slide = win.View.Slide;
                 double dipPerPt = (ctx != null && ctx.DipPerPt > 0.1) ? ctx.DipPerPt : (96.0 / 72.0);
-                double leftPt = ctx != null ? ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt : 60.0;
-                double topPt = ctx != null ? ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt : 60.0;
+                double leftPt = 60.0, topPt = 60.0;
+
+                if (ctx != null)
+                {
+                    leftPt = ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt;
+                    topPt = ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt;
+                }
+                else
+                {
+                    try
+                    {
+                        double x0 = Convert.ToDouble(win.PointsToScreenPixelsX(0f)) / dpiScaleX;
+                        double y0 = Convert.ToDouble(win.PointsToScreenPixelsY(0f)) / dpiScaleY;
+                        double x100 = Convert.ToDouble(win.PointsToScreenPixelsX(100f)) / dpiScaleX;
+                        if (x100 - x0 > 5.0) dipPerPt = (x100 - x0) / 100.0;
+                        leftPt = (screenBoxDip.Left - x0) / dipPerPt;
+                        topPt = (screenBoxDip.Top - y0) / dipPerPt;
+                    }
+                    catch { }
+                }
+
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
@@ -449,7 +511,7 @@ namespace ScienceWordOverlay.Utils
             catch (Exception ex) { error = "Lỗi đọc Excel: " + ex.Message; return null; }
         }
 
-        private static bool InsertPngToExcel(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, out string? error)
+        private static bool InsertPngToExcel(OfficeSelectionContext? ctx, string pngPath, Rect screenBoxDip, SceneState? sceneToEmbed, double dpiScaleX, double dpiScaleY, out string? error)
         {
             error = null;
             object? xlObj = GetActiveComObject("Excel.Application");
@@ -457,10 +519,30 @@ namespace ScienceWordOverlay.Utils
             try
             {
                 dynamic xlApp = xlObj;
+                dynamic win = xlApp.ActiveWindow;
                 dynamic sheet = xlApp.ActiveSheet;
                 double dipPerPt = (ctx != null && ctx.DipPerPt > 0.1) ? ctx.DipPerPt : (96.0 / 72.0);
-                double leftPt = ctx != null ? ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt : 60.0;
-                double topPt = ctx != null ? ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt : 60.0;
+                double leftPt = 60.0, topPt = 60.0;
+
+                if (ctx != null)
+                {
+                    leftPt = ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt;
+                    topPt = ctx.RefDocTopPt + (screenBoxDip.Top - ctx.RefDipTop) / dipPerPt;
+                }
+                else
+                {
+                    try
+                    {
+                        double x0 = Convert.ToDouble(win.PointsToScreenPixelsX(0.0)) / dpiScaleX;
+                        double y0 = Convert.ToDouble(win.PointsToScreenPixelsY(0.0)) / dpiScaleY;
+                        double x100 = Convert.ToDouble(win.PointsToScreenPixelsX(100.0)) / dpiScaleX;
+                        if (x100 - x0 > 5.0) dipPerPt = (x100 - x0) / 100.0;
+                        leftPt = (screenBoxDip.Left - x0) / dipPerPt;
+                        topPt = (screenBoxDip.Top - y0) / dipPerPt;
+                    }
+                    catch { }
+                }
+
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
