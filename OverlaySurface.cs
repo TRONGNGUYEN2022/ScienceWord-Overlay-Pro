@@ -1800,12 +1800,12 @@ namespace ScienceWordOverlay
             var dv = new DrawingVisual();
             using (var dc = dv.RenderOpen())
             {
-                if (ExportWhiteBg) dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, w, h));
-                dc.PushTransform(new ScaleTransform(scale, scale));
+                if (ExportWhiteBg) dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, bbox.Value.Width, bbox.Value.Height));
                 dc.PushTransform(new TranslateTransform(-bbox.Value.Left, -bbox.Value.Top));
                 RenderScene(dc, cleanExport: true);
-                dc.Pop(); dc.Pop();
+                dc.Pop();
             }
+            // RenderTargetBitmap với dpi = 96 * scale sẽ tự scale DrawingVisual đúng 1 lần theo tỉ lệ `scale`
             var rtb = new RenderTargetBitmap(w, h, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
             rtb.Render(dv);
             return rtb;

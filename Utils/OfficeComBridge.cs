@@ -313,6 +313,8 @@ namespace ScienceWordOverlay.Utils
                 double dipPerPt = (ctx != null && ctx.DipPerPt > 0.1) ? ctx.DipPerPt : (96.0 / 72.0) * (zoomPct / 100.0);
                 double leftPt = 72.0, topPt = 72.0;
 
+                object? anchorRange = ctx?.RefAnchor;
+
                 if (ctx != null)
                 {
                     leftPt = ctx.RefDocLeftPt + (screenBoxDip.Left - ctx.RefDipLeft) / dipPerPt;
@@ -320,37 +322,43 @@ namespace ScienceWordOverlay.Utils
                 }
                 else
                 {
-                    // Tự ánh xạ đúng tọa độ màn hình sang trang Word qua vị trí con trỏ (caret) hiện tại
-                    try
+                    // Tính tọa độ tương đối trực tiếp từ vị trí hình trên màn hình thông qua ActiveWindow.RangeFromPoint
+                    if (TryResolveWordScreenAnchor(winObj, screenBoxDip, dpiScaleX, dpiScaleY, dipPerPt,
+                        out object? screenAnchor, out double resolvedLeftPt, out double resolvedTopPt))
                     {
-                        object selRangeObj = wordApp.Selection.Range;
-                        if (TryWordGetPoint(winObj, selRangeObj, out Rect caretPx))
-                        {
-                            double caretXPt = GetComIndexedDouble(selRangeObj, "Information", 5);
-                            double caretYPt = GetComIndexedDouble(selRangeObj, "Information", 6);
-                            double caretDipX = caretPx.Left / dpiScaleX;
-                            double caretDipY = caretPx.Top / dpiScaleY;
-                            leftPt = caretXPt + (screenBoxDip.Left - caretDipX) / dipPerPt;
-                            topPt = caretYPt + (screenBoxDip.Top - caretDipY) / dipPerPt;
-                        }
+                        anchorRange = screenAnchor;
+                        leftPt = resolvedLeftPt;
+                        topPt = resolvedTopPt;
                     }
-                    catch { }
+                    else
+                    {
+                        try
+                        {
+                            object selRangeObj = wordApp.Selection.Range;
+                            if (TryWordGetPoint(winObj, selRangeObj, out Rect caretPx))
+                            {
+                                double caretXPt = GetComIndexedDouble(selRangeObj, "Information", 5);
+                                double caretYPt = GetComIndexedDouble(selRangeObj, "Information", 6);
+                                leftPt = caretXPt + (screenBoxDip.Left - caretPx.Left / dpiScaleX) / dipPerPt;
+                                topPt = caretYPt + (screenBoxDip.Top - caretPx.Top / dpiScaleY) / dipPerPt;
+                                anchorRange = selRangeObj;
+                            }
+                        }
+                        catch { }
+                    }
                 }
 
                 double wPt = screenBoxDip.Width / dipPerPt;
                 double hPt = screenBoxDip.Height / dipPerPt;
 
-                dynamic pic = ctx?.RefAnchor != null
-                    ? doc.Shapes.AddPicture(pngPath, false, true, (float)leftPt, (float)topPt, (float)wPt, (float)hPt, ctx.RefAnchor)
+                dynamic pic = anchorRange != null
+                    ? doc.Shapes.AddPicture(pngPath, false, true, (float)leftPt, (float)topPt, (float)wPt, (float)hPt, anchorRange)
                     : doc.Shapes.AddPicture(pngPath, false, true, (float)leftPt, (float)topPt, (float)wPt, (float)hPt);
 
                 try { pic.LockAspectRatio = MsoTrue; } catch { }
                 try { pic.WrapFormat.Type = 3; } catch { }
-                if (ctx != null)
-                {
-                    try { pic.RelativeHorizontalPosition = ctx.RefRelH; } catch { }
-                    try { pic.RelativeVerticalPosition = ctx.RefRelV; } catch { }
-                }
+                try { pic.RelativeHorizontalPosition = ctx != null ? ctx.RefRelH : 1; } catch { }
+                try { pic.RelativeVerticalPosition = ctx != null ? ctx.RefRelV : 1; } catch { }
                 pic.Left = (float)leftPt; pic.Top = (float)topPt;
                 pic.Width = (float)wPt; pic.Height = (float)hPt;
                 if (sceneToEmbed != null)
@@ -773,6 +781,74 @@ namespace ScienceWordOverlay.Utils
             }
             if (tMin > tMax) { tMin = 0; tMax = 0; }
             return tr;
+        }
+
+        private static bool TryResolveWordScreenAnchor(
+            object winObj,
+            Rect screenBoxDip,
+            double dpiScaleX,
+            double dpiScaleY,
+            double dipPerPt,
+            out object? anchorRange,
+            out double leftPt,
+            out double topPt)
+        {
+            anchorRange = null;
+            leftPt = 72.0;
+            topPt = 72.0;
+
+            // Thử dò điểm neo ngay tại tâm, 4 góc và các điểm lân cận của vùng vẽ trên màn hình
+            double cx = screenBoxDip.Left + screenBoxDip.Width * 0.5;
+            double cy = screenBoxDip.Top + screenBoxDip.Height * 0.5;
+            Point[] probesDip =
+            {
+                new(cx, cy),
+                new(screenBoxDip.Left + 8, screenBoxDip.Top + 8),
+                new(screenBoxDip.Right - 8, screenBoxDip.Top + 8),
+                new(screenBoxDip.Left + 8, screenBoxDip.Bottom - 8),
+                new(cx - 120, cy),
+                new(cx + 120, cy),
+                new(cx, cy - 120),
+                new(cx, cy + 120)
+            };
+
+            foreach (var pDip in probesDip)
+            {
+                try
+                {
+                    int pxX = (int)Math.Round(pDip.X * dpiScaleX);
+                    int pxY = (int)Math.Round(pDip.Y * dpiScaleY);
+                    object? hitObj = winObj.GetType().InvokeMember(
+                        "RangeFromPoint", BindingFlags.InvokeMethod, null, winObj, new object[] { pxX, pxY });
+                    if (hitObj == null) continue;
+
+                    // Nếu trúng một Shape có sẵn trên Word -> lấy Anchor Range của Shape đó
+                    object rangeObj = hitObj;
+                    try
+                    {
+                        dynamic dHit = hitObj;
+                        object? shAnchor = dHit.Anchor;
+                        if (shAnchor != null) rangeObj = shAnchor;
+                    }
+                    catch { }
+
+                    if (!TryWordGetPoint(winObj, rangeObj, out Rect rngPx)) continue;
+
+                    double refPageXPt = GetComIndexedDouble(rangeObj, "Information", 5); // wdHorizontalPositionRelativeToPage
+                    double refPageYPt = GetComIndexedDouble(rangeObj, "Information", 6); // wdVerticalPositionRelativeToPage
+                    if (refPageXPt < -50 || refPageYPt < -50) continue;
+
+                    double refDipX = rngPx.Left / dpiScaleX;
+                    double refDipY = rngPx.Top / dpiScaleY;
+
+                    anchorRange = rangeObj;
+                    leftPt = refPageXPt + (screenBoxDip.Left - refDipX) / dipPerPt;
+                    topPt = refPageYPt + (screenBoxDip.Top - refDipY) / dipPerPt;
+                    return true;
+                }
+                catch { }
+            }
+            return false;
         }
 
         private static bool TryWordGetPoint(object activeWindow, object targetObj, out Rect rect)

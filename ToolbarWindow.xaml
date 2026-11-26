@@ -80,7 +80,7 @@
         <StackPanel>
             <!-- HANG 1: CONG CU VE + SNIPPING TOOL + DUA THAN -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="⋮⋮ W² v7" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
+                <TextBlock Text="⋮⋮ W² v7.2" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="12"
                            VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll"
                            MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
 
