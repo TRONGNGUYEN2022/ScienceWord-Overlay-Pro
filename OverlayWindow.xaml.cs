@@ -12,6 +12,12 @@ namespace ScienceWordOverlay
         public OverlayWindow()
         {
             InitializeComponent();
+            // Dat khop 100% VirtualScreen, khong dung WindowState=Maximized de tranh lech -8px DWM cua Win10
+            Left = SystemParameters.VirtualScreenLeft;
+            Top = SystemParameters.VirtualScreenTop;
+            Width = SystemParameters.VirtualScreenWidth;
+            Height = SystemParameters.VirtualScreenHeight;
+
             SourceInitialized += (_, _) => Win32Helper.HideFromAltTab(this);
             PreviewKeyDown += (_, e) => Surface.HandleKeyDown(e);
             Surface.ContextMenuRequested += OnContextMenuRequested;
@@ -84,10 +90,11 @@ namespace ScienceWordOverlay
             }
             else if (kind == "rev" && Surface.RevScene != null)
             {
-                ContextMenuItems.Children.Add(MakeCtxBtn("＋ Cận (Click)", () => Surface.SetTool("add_bound"), "#0EA5E9"));
+                ContextMenuItems.Children.Add(MakeCtxBtn("＋ Cận/Miền", () => Surface.SetTool("add_bound"), "#0EA5E9"));
                 ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu S", () => Surface.CycleArea2DColor(), Surface.Area2DColorHex));
                 ContextMenuItems.Children.Add(MakeCtxBtn("🌀 Quay 3D (V)", () => { Surface.RevMode = MathRenderMode.Solid3D; Surface.InvalidateVisual(); }, "#7C3AED"));
                 ContextMenuItems.Children.Add(MakeCtxBtn("🎨 Màu V", () => Surface.CycleVolume3DColor(), Surface.Volume3DColorHex));
+                ContextMenuItems.Children.Add(MakeCtxBtn("－ Miền", () => Surface.RemoveRevolutionRegion(), "#475569"));
                 ContextMenuItems.Children.Add(MakeCtxBtn("🗑", () => { Surface.RevScene = null; Surface.NotifyMetrics(); Surface.InvalidateVisual(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
             }
             else
@@ -98,9 +105,7 @@ namespace ScienceWordOverlay
 
             ContextMenuBar.Visibility = Visibility.Visible;
             ContextMenuBar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            double bw = ContextMenuBar.DesiredSize.Width;
-            double bh = ContextMenuBar.DesiredSize.Height;
-
+            double bw = ContextMenuBar.DesiredSize.Width, bh = ContextMenuBar.DesiredSize.Height;
             double x = Math.Clamp(anchor.Value.X, 12, Math.Max(12, ActualWidth - bw - 16));
             double y = anchor.Value.Y - bh - 12;
             if (y < 92) y = Math.Min(ActualHeight - bh - 20, anchor.Value.Y + 18);

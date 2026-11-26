@@ -17,8 +17,7 @@ namespace ScienceWordOverlay
         private readonly DispatcherTimer _appPollTimer;
         private readonly DispatcherTimer _revAnimTimer;
         private DispatcherTimer? _spin3DTimer;
-        private bool _isAnimatingRev = false;
-        private bool _isSpinning3D = false;
+        private bool _isAnimatingRev = false, _isSpinning3D = false;
         private readonly OfficeDoubleClickHook _dblClickHook = new();
         private readonly DispatcherTimer _dblClickDelayTimer;
         private string _pendingDblClickProc = "";
@@ -46,7 +45,7 @@ namespace ScienceWordOverlay
                 {
                     "select" => "Chọn / Di chuyển",
                     "orbit_3d" => "Xoay 3D",
-                    "add_bound" => "+ Cận (Click)",
+                    "add_bound" => "+ Cận/Miền",
                     "point_edge_3d" => "Điểm cạnh 3D",
                     "parallel_3d" => "Song song 3D",
                     "section_3d" => "Thiết diện 3D",
@@ -55,8 +54,7 @@ namespace ScienceWordOverlay
             };
 
             _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
-            _appPollTimer.Tick += OnPollForegroundApp;
-            _appPollTimer.Start();
+            _appPollTimer.Tick += OnPollForegroundApp; _appPollTimer.Start();
 
             _revAnimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
             _revAnimTimer.Tick += OnRevAnimTick;
@@ -68,12 +66,9 @@ namespace ScienceWordOverlay
             _dblClickDelayTimer.Tick += (_, _) =>
             {
                 _dblClickDelayTimer.Stop();
-                bool ok = false;
-                string up = _pendingDblClickProc.ToUpperInvariant();
-                if (up is "WINWORD" or "POWERPNT" or "EXCEL")
-                    ok = _overlay.Surface.TryRestoreFromOfficeDoubleClick(_pendingDblClickProc);
-                else if (up.Contains("SCIENCEWORD") || up == "SW")
-                    ok = _overlay.Surface.TryRestoreFromScienceWordDoubleClick(_pendingDblClickHwnd, _pendingDblClickX, _pendingDblClickY);
+                bool ok = false; string up = _pendingDblClickProc.ToUpperInvariant();
+                if (up is "WINWORD" or "POWERPNT" or "EXCEL") ok = _overlay.Surface.TryRestoreFromOfficeDoubleClick(_pendingDblClickProc);
+                else if (up.Contains("SCIENCEWORD") || up == "SW") ok = _overlay.Surface.TryRestoreFromScienceWordDoubleClick(_pendingDblClickHwnd, _pendingDblClickX, _pendingDblClickY);
                 if (ok && BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
             };
             _dblClickHook.TargetAppDoubleClicked += (proc, hwnd, px, py) =>
@@ -93,42 +88,20 @@ namespace ScienceWordOverlay
         }
 
         private void BtnToCircle_Click(object sender, RoutedEventArgs e) => ToggleFabMode(true);
-
-        private void Fab_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            _fabPressed = true; _fabDragged = false;
-            _fabDownPos = e.GetPosition(this);
-            ((UIElement)sender).CaptureMouse();
-        }
-
+        private void Fab_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) { _fabPressed = true; _fabDragged = false; _fabDownPos = e.GetPosition(this); ((UIElement)sender).CaptureMouse(); }
         private void Fab_MouseMove(object sender, MouseEventArgs e)
         {
             if (!_fabPressed || e.LeftButton != MouseButtonState.Pressed) return;
             Point cur = e.GetPosition(this);
-            if (!_fabDragged && (Math.Abs(cur.X - _fabDownPos.X) > 5 || Math.Abs(cur.Y - _fabDownPos.Y) > 5))
-            {
-                _fabDragged = true; _fabPressed = false;
-                ((UIElement)sender).ReleaseMouseCapture();
-                try { DragMove(); } catch { }
-            }
+            if (!_fabDragged && (Math.Abs(cur.X - _fabDownPos.X) > 5 || Math.Abs(cur.Y - _fabDownPos.Y) > 5)) { _fabDragged = true; _fabPressed = false; ((UIElement)sender).ReleaseMouseCapture(); try { DragMove(); } catch { } }
         }
-
-        private void Fab_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            if (_fabPressed)
-            {
-                _fabPressed = false;
-                ((UIElement)sender).ReleaseMouseCapture();
-                if (!_fabDragged) ToggleFabMode(false);
-            }
-        }
+        private void Fab_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) { if (_fabPressed) { _fabPressed = false; ((UIElement)sender).ReleaseMouseCapture(); if (!_fabDragged) ToggleFabMode(false); } }
 
         private void Fab_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
         {
             var menu = new ContextMenu();
             var m1 = new MenuItem { Header = "📂 Bung thanh công cụ" }; m1.Click += (_, _) => ToggleFabMode(false); menu.Items.Add(m1);
-            var m2 = new MenuItem { Header = BtnPassthrough.IsChecked == true ? "✏️ Chuyển về chế độ Vẽ" : "🖱️ Bật Xuyên chuột" };
-            m2.Click += (_, _) => BtnPassthrough.IsChecked = !(BtnPassthrough.IsChecked == true); menu.Items.Add(m2);
+            var m2 = new MenuItem { Header = BtnPassthrough.IsChecked == true ? "✏️ Chuyển về chế độ Vẽ" : "🖱️ Bật Xuyên chuột" }; m2.Click += (_, _) => BtnPassthrough.IsChecked = !(BtnPassthrough.IsChecked == true); menu.Items.Add(m2);
             var m3 = new MenuItem { Header = "📥 Chèn hình vào App" }; m3.Click += (_, _) => _overlay.Surface.InsertIntoTargetApp(); menu.Items.Add(m3);
             menu.Items.Add(new Separator());
             var m4 = new MenuItem { Header = "❌ Thoát ứng dụng" }; m4.Click += BtnClose_Click; menu.Items.Add(m4);
@@ -137,34 +110,22 @@ namespace ScienceWordOverlay
 
         private void ClampToScreenBounds()
         {
-            var wa = SystemParameters.WorkArea;
-            if (ActualWidth <= 0) return;
+            var wa = SystemParameters.WorkArea; if (ActualWidth <= 0) return;
             if (Left + ActualWidth > wa.Right) Left = Math.Max(wa.Left + 2, wa.Right - ActualWidth - 4);
-            if (Left < wa.Left) Left = wa.Left + 2;
-            if (Top < wa.Top) Top = wa.Top + 2;
+            if (Left < wa.Left) Left = wa.Left + 2; if (Top < wa.Top) Top = wa.Top + 2;
         }
 
         private void OnPollForegroundApp(object? sender, EventArgs e)
         {
-            var (hwnd, procName, _) = Win32Helper.GetForegroundAppInfo();
-            if (hwnd == IntPtr.Zero) return;
-            var myHwnd = new WindowInteropHelper(this).Handle;
-            var ovHwnd = new WindowInteropHelper(_overlay).Handle;
-            if (hwnd == myHwnd || hwnd == ovHwnd) return;
-            if (string.Equals(procName, "ScienceWord_Overlay_Pro", StringComparison.OrdinalIgnoreCase)) return;
+            var (hwnd, procName, _) = Win32Helper.GetForegroundAppInfo(); if (hwnd == IntPtr.Zero) return;
+            var myHwnd = new WindowInteropHelper(this).Handle; var ovHwnd = new WindowInteropHelper(_overlay).Handle;
+            if (hwnd == myHwnd || hwnd == ovHwnd || string.Equals(procName, "ScienceWord_Overlay_Pro", StringComparison.OrdinalIgnoreCase)) return;
             _overlay.Surface.LastTargetHwnd = hwnd; _overlay.Surface.LastTargetProcName = procName;
             TxtTargetApp.Text = "Đích: " + Win32Helper.FriendlyAppName(procName);
         }
 
         private void Grip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
-
-        private void ActivateTool(string tag, string displayName)
-        {
-            if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
-            _overlay.Surface.SetTool(tag);
-            TxtActiveTool.Text = displayName;
-        }
-
+        private void ActivateTool(string tag, string displayName) { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SetTool(tag); TxtActiveTool.Text = displayName; }
         private void QuickSelect_Click(object sender, RoutedEventArgs e) => ActivateTool("select", "Chọn / Di chuyển");
 
         private void BtnMenu2D_Click(object sender, RoutedEventArgs e)
@@ -206,17 +167,12 @@ namespace ScienceWordOverlay
         private void BtnMenu3D_Click(object sender, RoutedEventArgs e)
         {
             var menu = new ContextMenu();
-            void AddSolid(string header, string presetKey)
-            {
-                var mi = new MenuItem { Header = header };
-                mi.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SpawnInteractiveSolid3D(presetKey); SlSplit3D.Value = 0; };
-                menu.Items.Add(mi);
-            }
+            void AddSolid(string header, string presetKey) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SpawnInteractiveSolid3D(presetKey); SlSplit3D.Value = 0; }; menu.Items.Add(mi); }
             void Add3DTool(string header, string tag, string shortName) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => ActivateTool(tag, shortName); menu.Items.Add(mi); }
 
-            AddSolid("🍦 Hình nón 3D (Khối đặc mịn)", "cone");
-            AddSolid("🥫 Hình trụ 3D (Khối đặc mịn)", "cylinder");
-            AddSolid("🔮 Hình cầu 3D (Khối đặc mịn)", "sphere");
+            AddSolid("🍦 Hình nón 3D (Nét đứt chuẩn + Khối đặc)", "cone");
+            AddSolid("🥫 Hình trụ 3D (Nét đứt chuẩn + Khối đặc)", "cylinder");
+            AddSolid("🔮 Hình cầu 3D (Nét đứt chuẩn + Khối đặc)", "sphere");
             menu.Items.Add(new Separator());
             AddSolid("🔺 Chóp S.ABCD (đáy hình bình hành)", "pyramid_para");
             AddSolid("📐 Chóp S.ABCD (SA ⊥ đáy)", "pyramid_perp");
@@ -250,77 +206,38 @@ namespace ScienceWordOverlay
             menu.PlacementTarget = BtnMenuBg; menu.IsOpen = true;
         }
 
-        private void BtnPassthrough_Checked(object sender, RoutedEventArgs e)
-        {
-            BtnPassthrough.Background = new SolidColorBrush(Color.FromRgb(234, 88, 12));
-            FabStatusDot.Fill = new SolidColorBrush(Color.FromRgb(249, 115, 22));
-            _overlay.SetPassthrough(true); Topmost = true;
-        }
-
-        private void BtnPassthrough_Unchecked(object sender, RoutedEventArgs e)
-        {
-            BtnPassthrough.Background = new SolidColorBrush(Color.FromRgb(51, 65, 85));
-            FabStatusDot.Fill = new SolidColorBrush(Color.FromRgb(34, 197, 94));
-            _overlay.SetPassthrough(false); Topmost = true;
-        }
-
+        private void BtnPassthrough_Checked(object sender, RoutedEventArgs e) { BtnPassthrough.Background = new SolidColorBrush(Color.FromRgb(234, 88, 12)); FabStatusDot.Fill = new SolidColorBrush(Color.FromRgb(249, 115, 22)); _overlay.SetPassthrough(true); Topmost = true; }
+        private void BtnPassthrough_Unchecked(object sender, RoutedEventArgs e) { BtnPassthrough.Background = new SolidColorBrush(Color.FromRgb(51, 65, 85)); FabStatusDot.Fill = new SolidColorBrush(Color.FromRgb(34, 197, 94)); _overlay.SetPassthrough(false); Topmost = true; }
         private void StrokeColor_Click(object sender, RoutedEventArgs e) { if (sender is Button btn && btn.Tag is string hex) { _overlay.Surface.StrokeColorHex = hex; _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast($"Màu nét: {hex}"); } }
 
         private void FillColor_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button btn && btn.Tag is string hex)
             {
-                _overlay.Surface.FillColorHex = hex;
-                _overlay.Surface.Area2DColorHex = hex;
+                _overlay.Surface.FillColorHex = hex; _overlay.Surface.Area2DColorHex = hex;
                 if (_overlay.Surface.Solid3D != null) { _overlay.Surface.Solid3D.SolidColorHex = hex; _overlay.Surface.Solid3D.IsSolidShaded = true; }
-                if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.IsValid && _overlay.Surface.RevMode == MathRenderMode.Area2D)
-                    _overlay.Surface.RevScene.SetActiveRegionColor(hex);
+                if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.IsValid && _overlay.Surface.RevMode == MathRenderMode.Area2D) _overlay.Surface.RevScene.SetActiveRegionColor(hex);
                 if (BtnColorArea != null) BtnColorArea.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
-                _overlay.Surface.InvalidateVisual();
-                _overlay.Surface.ShowToast($"Đã chọn màu tô / Khối đặc 3D: {hex}");
+                _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast($"Màu tô / Khối đặc 3D: {hex}");
             }
         }
 
         private void CbPenType_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbPenType.SelectedItem is ComboBoxItem item && item.Tag is string ps) { _overlay.Surface.PenTipStyle = ps; _overlay.Surface.InvalidateVisual(); } }
         private void CbWidth_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbWidth.SelectedItem is ComboBoxItem item && item.Tag is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double w)) _overlay.Surface.StrokeWidth = w; }
         private void CbPattern_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbPattern.SelectedItem is ComboBoxItem item && item.Tag is string pat) { _overlay.Surface.FillPattern = pat; _overlay.Surface.InvalidateVisual(); } }
-        private void SlOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_overlay == null) return;
-            double v = e.NewValue / 100.0;
-            _overlay.Surface.FillOpacity = v;
-            if (_overlay.Surface.Solid3D != null) _overlay.Surface.Solid3D.SolidOpacity = v;
-            _overlay.Surface.InvalidateVisual();
-        }
-
+        private void SlOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay == null) return; double v = e.NewValue / 100.0; _overlay.Surface.FillOpacity = v; if (_overlay.Surface.Solid3D != null) _overlay.Surface.Solid3D.SolidOpacity = v; _overlay.Surface.InvalidateVisual(); }
         private void BtnToggleShaded3D_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ToggleSolid3DShaded();
 
         private void BtnAutoSpin3D_Click(object sender, RoutedEventArgs e)
         {
             if (_overlay.Surface.Solid3D == null) { _overlay.Surface.ShowToast("Hãy chọn 1 khối từ menu [Vẽ 3D ▾] trước!"); return; }
-            if (_spin3DTimer == null)
-            {
-                _spin3DTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) };
-                _spin3DTimer.Tick += (_, _) => { if (_overlay.Surface.Solid3D == null) return; _overlay.Surface.Solid3D.YawDeg = (_overlay.Surface.Solid3D.YawDeg + 1.4) % 360.0; _overlay.Surface.InvalidateVisual(); };
-            }
+            if (_spin3DTimer == null) { _spin3DTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) }; _spin3DTimer.Tick += (_, _) => { if (_overlay.Surface.Solid3D == null) return; _overlay.Surface.Solid3D.YawDeg = (_overlay.Surface.Solid3D.YawDeg + 1.4) % 360.0; _overlay.Surface.InvalidateVisual(); }; }
             _isSpinning3D = !_isSpinning3D;
             if (_isSpinning3D) { _spin3DTimer.Start(); BtnAutoSpin3D.Content = "⏸ Dừng"; } else { _spin3DTimer.Stop(); BtnAutoSpin3D.Content = "▶ Quay"; }
         }
 
-        private void SlSplit3D_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (_overlay == null || _overlay.Surface.Solid3D == null) return;
-            _overlay.Surface.Solid3D.SplitAmount = e.NewValue / 100.0;
-            if (TxtSplit3D != null) TxtSplit3D.Text = $"Tách:{e.NewValue:0}%";
-            _overlay.Surface.InvalidateVisual();
-        }
-
-        private void BtnClearSolid3D_Click(object sender, RoutedEventArgs e)
-        {
-            _isSpinning3D = false; _spin3DTimer?.Stop(); BtnAutoSpin3D.Content = "▶ Quay";
-            _overlay.Surface.DeleteSolid3D(); SlSplit3D.Value = 0;
-        }
-
+        private void SlSplit3D_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay == null || _overlay.Surface.Solid3D == null) return; _overlay.Surface.Solid3D.SplitAmount = e.NewValue / 100.0; if (TxtSplit3D != null) TxtSplit3D.Text = $"Tách:{e.NewValue:0}%"; _overlay.Surface.InvalidateVisual(); }
+        private void BtnClearSolid3D_Click(object sender, RoutedEventArgs e) { _isSpinning3D = false; _spin3DTimer?.Stop(); BtnAutoSpin3D.Content = "▶ Quay"; _overlay.Surface.DeleteSolid3D(); SlSplit3D.Value = 0; }
         private void BtnUndo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Undo();
         private void BtnRedo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Redo();
         private void BtnClear_Click(object sender, RoutedEventArgs e) { BtnClearSolid3D_Click(sender, e); _overlay.Surface.ClearAll(); Row3Panel.Visibility = Visibility.Collapsed; }
@@ -332,50 +249,31 @@ namespace ScienceWordOverlay
 
         private void BtnHistoryEdit_Click(object sender, RoutedEventArgs e)
         {
-            var menu = new ContextMenu();
-            var recent = SceneHistoryStore.GetRecent(10);
+            var menu = new ContextMenu(); var recent = SceneHistoryStore.GetRecent(10);
             if (recent.Count == 0) menu.Items.Add(new MenuItem { Header = "(Chưa có hình nào được chèn gần đây)", IsEnabled = false });
-            else foreach (var entry in recent)
-            {
-                var item = new MenuItem { Header = $"{entry.Label} ({entry.TargetApp})" };
-                var captured = entry;
-                item.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.RestoreFromHistoryEntry(captured); };
-                menu.Items.Add(item);
-            }
+            else foreach (var entry in recent) { var item = new MenuItem { Header = $"{entry.Label} ({entry.TargetApp})" }; var captured = entry; item.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.RestoreFromHistoryEntry(captured); }; menu.Items.Add(item); }
             menu.PlacementTarget = BtnHistoryEdit; menu.IsOpen = true;
         }
 
         private void BtnRevArea_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice(); _overlay.Surface.RevMode = MathRenderMode.Area2D; BtnRevArea.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)); BtnRev3D.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59)); _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
         private void BtnRev3D_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice(); _overlay.Surface.RevMode = MathRenderMode.Solid3D; BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)); BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59)); _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
-        private void BtnClickAddBound_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice(); ActivateTool("add_bound", "+ Cận (Click)"); _overlay.Surface.ShowToast("Click trực tiếp lên đồ thị / trục để đặt thêm cận mới!", 3800); }
-        private void BtnRemoveBound_Click(object sender, RoutedEventArgs e) => _overlay.Surface.RemoveRevolutionBound();
+        private void BtnClickAddBound_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice(); ActivateTool("add_bound", "+ Cận/Miền"); _overlay.Surface.ShowToast("Click lên vùng trống để tạo miền rời mới, hoặc click vào miền cũ để tách đôi!", 4200); }
+        private void BtnRemoveRegion_Click(object sender, RoutedEventArgs e) => _overlay.Surface.RemoveRevolutionRegion();
         private void BtnColorArea_Click(object sender, RoutedEventArgs e) { string hex = _overlay.Surface.CycleArea2DColor(); BtnColorArea.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
         private void BtnColorVol_Click(object sender, RoutedEventArgs e) { string hex = _overlay.Surface.CycleVolume3DColor(); BtnColorVol.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
 
         private void BtnRevAnim_Click(object sender, RoutedEventArgs e)
         {
-            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
-            if (_overlay.Surface.RevScene == null) return;
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice(); if (_overlay.Surface.RevScene == null) return;
             if (_isAnimatingRev) { _isAnimatingRev = false; _revAnimTimer.Stop(); BtnRevAnim.Content = "▶ 360°"; }
             else { _overlay.Surface.RevMode = MathRenderMode.Solid3D; BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)); BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59)); SlRevAngle.Value = 0; _isAnimatingRev = true; BtnRevAnim.Content = "⏸ Dừng"; _revAnimTimer.Start(); }
         }
-
-        private void OnRevAnimTick(object? sender, EventArgs e)
-        {
-            double next = SlRevAngle.Value + 5.0;
-            if (next >= 360.0) { next = 360.0; _isAnimatingRev = false; _revAnimTimer.Stop(); BtnRevAnim.Content = "▶ 360°"; }
-            SlRevAngle.Value = next;
-        }
-
+        private void OnRevAnimTick(object? sender, EventArgs e) { double next = SlRevAngle.Value + 5.0; if (next >= 360.0) { next = 360.0; _isAnimatingRev = false; _revAnimTimer.Stop(); BtnRevAnim.Content = "▶ 360°"; } SlRevAngle.Value = next; }
         private void SlRevAngle_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay != null) { _overlay.Surface.RevSweepDeg = e.NewValue; if (TxtRevAngle != null) TxtRevAngle.Text = $"{e.NewValue:0}°"; _overlay.Surface.InvalidateVisual(); } }
         private void ChkRevCaps_Changed(object sender, RoutedEventArgs e) { if (_overlay != null) { _overlay.Surface.RevShowCaps = (sender as CheckBox)?.IsChecked == true; _overlay.Surface.InvalidateVisual(); } }
         private void BtnRevSwap_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.SwapAxisAndCurve()) { _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast("Đã đổi trục quay & đường cong sinh!"); } }
         private void BtnRevClear_Click(object sender, RoutedEventArgs e) { _overlay.Surface.RevScene = null; Row3Panel.Visibility = Visibility.Collapsed; _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e)
-        {
-            _appPollTimer.Stop(); _revAnimTimer.Stop(); _spin3DTimer?.Stop(); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose();
-            Application.Current.Shutdown();
-        }
+        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _spin3DTimer?.Stop(); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); Application.Current.Shutdown(); }
     }
 }

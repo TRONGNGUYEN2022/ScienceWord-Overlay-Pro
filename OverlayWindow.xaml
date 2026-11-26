@@ -4,10 +4,11 @@
         xmlns:local="clr-namespace:ScienceWordOverlay"
         Title="ScienceWord Overlay Pro"
         WindowStyle="None"
+        ResizeMode="NoResize"
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        WindowState="Maximized"
+        WindowState="Normal"
         ShowInTaskbar="False">
     <Grid>
         <local:OverlaySurface x:Name="Surface"/>

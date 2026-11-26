@@ -44,6 +44,8 @@ namespace ScienceWordOverlay.Utils
         private const int MsoTrue = -1;
         private const string AltPrefix = "SWOV_V6|";
         private const string AltPrefixV5 = "SWOV_V5|";
+        // Goc toa do vat ly (px) cua OverlaySurface tren man hinh — loai bo hoan toan do lech vien DWM (-8px)
+        public static Point SurfaceOriginScreenPx { get; set; } = new(0, 0);
 
         [DllImport("ole32.dll")]
         private static extern int CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string lpszProgID, out Guid pclsid);
@@ -201,7 +203,7 @@ namespace ScienceWordOverlay.Utils
                 var payload = JsonSerializer.Deserialize<EmbeddedPayload>(json);
                 if (payload == null) return null;
 
-                Rect shDip = new(shPx.Left / dpiScaleX, shPx.Top / dpiScaleY, Math.Max(2, shPx.Width / dpiScaleX), Math.Max(2, shPx.Height / dpiScaleY));
+                Rect shDip = new((shPx.Left - SurfaceOriginScreenPx.X) / dpiScaleX, (shPx.Top - SurfaceOriginScreenPx.Y) / dpiScaleY, Math.Max(2, shPx.Width / dpiScaleX), Math.Max(2, shPx.Height / dpiScaleY));
                 double sx = payload.BoxW > 2 ? shDip.Width / payload.BoxW : 1.0;
                 double sy = payload.BoxH > 2 ? shDip.Height / payload.BoxH : 1.0;
 
@@ -622,7 +624,8 @@ namespace ScienceWordOverlay.Utils
                 Rect shPx = getShapeRectPx(shObj);
                 if (shPx.IsEmpty) continue;
 
-                Rect shDip = new(shPx.Left / dpiScaleX, shPx.Top / dpiScaleY,
+                Rect shDip = new((shPx.Left - SurfaceOriginScreenPx.X) / dpiScaleX,
+                                 (shPx.Top - SurfaceOriginScreenPx.Y) / dpiScaleY,
                                  Math.Max(1.0, shPx.Width / dpiScaleX), Math.Max(1.0, shPx.Height / dpiScaleY));
 
                 var rawPt = ExtractShapePointsInPt(shObj, out bool isLine);
@@ -816,8 +819,8 @@ namespace ScienceWordOverlay.Utils
             {
                 try
                 {
-                    int pxX = (int)Math.Round(pDip.X * dpiScaleX);
-                    int pxY = (int)Math.Round(pDip.Y * dpiScaleY);
+                    int pxX = (int)Math.Round(SurfaceOriginScreenPx.X + pDip.X * dpiScaleX);
+                    int pxY = (int)Math.Round(SurfaceOriginScreenPx.Y + pDip.Y * dpiScaleY);
                     object? hitObj = winObj.GetType().InvokeMember(
                         "RangeFromPoint", BindingFlags.InvokeMethod, null, winObj, new object[] { pxX, pxY });
                     if (hitObj == null) continue;
@@ -838,8 +841,8 @@ namespace ScienceWordOverlay.Utils
                     double refPageYPt = GetComIndexedDouble(rangeObj, "Information", 6); // wdVerticalPositionRelativeToPage
                     if (refPageXPt < -50 || refPageYPt < -50) continue;
 
-                    double refDipX = rngPx.Left / dpiScaleX;
-                    double refDipY = rngPx.Top / dpiScaleY;
+                    double refDipX = (rngPx.Left - SurfaceOriginScreenPx.X) / dpiScaleX;
+                    double refDipY = (rngPx.Top - SurfaceOriginScreenPx.Y) / dpiScaleY;
 
                     anchorRange = rangeObj;
                     leftPt = refPageXPt + (screenBoxDip.Left - refDipX) / dipPerPt;

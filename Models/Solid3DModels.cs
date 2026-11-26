@@ -71,7 +71,6 @@ namespace ScienceWordOverlay.Models
         public double SplitAmount { get; set; } = 0.0;
         public bool AutoHiddenLines { get; set; } = true;
 
-        // Khối đặc có màu (hỗ trợ cho Nón, Trụ, Cầu và mọi đa diện)
         public bool IsSolidShaded { get; set; } = true;
         public string SolidColorHex { get; set; } = "#38BDF8";
         public double SolidOpacity { get; set; } = 0.50;
@@ -96,7 +95,6 @@ namespace ScienceWordOverlay.Models
             return new Vec3(x1, y1 * Math.Cos(rx) - z1 * Math.Sin(rx), y1 * Math.Sin(rx) + z1 * Math.Cos(rx));
         }
 
-        // Hướng vectơ đơn vị từ gốc về phía Camera trong hệ tọa độ cục bộ
         public Vec3 GetCameraLocalDir()
         {
             double ry = YawDeg * Math.PI / 180.0;
@@ -125,14 +123,11 @@ namespace ScienceWordOverlay.Models
             if (f.VertexIds.Count < 3) return new Vec3(0, 0, 1);
             var v0 = GetV(f.VertexIds[0]); var v1 = GetV(f.VertexIds[1]); var v2 = GetV(f.VertexIds[2]);
             if (v0 == null || v1 == null || v2 == null) return new Vec3(0, 0, 1);
-
             Vec3 n = Vec3.Cross(v1.Pos - v0.Pos, v2.Pos - v0.Pos).Normalized();
-            Vec3 faceCenter = new(0, 0, 0);
-            int cnt = 0;
-            foreach (var id in f.VertexIds) { var v = GetV(id); if (v != null) { faceCenter = faceCenter + v.Pos; cnt++; } }
-            if (cnt > 0) faceCenter = faceCenter * (1.0 / cnt);
-            Vec3 solidCenter = ComputeCentroid();
-            if (Vec3.Dot(n, faceCenter - solidCenter) < 0) n = n * -1.0;
+            Vec3 fc = new(0, 0, 0); int cnt = 0;
+            foreach (var id in f.VertexIds) { var v = GetV(id); if (v != null) { fc = fc + v.Pos; cnt++; } }
+            if (cnt > 0) fc = fc * (1.0 / cnt);
+            if (Vec3.Dot(n, fc - ComputeCentroid()) < 0) n = n * -1.0;
             return n;
         }
 
@@ -179,7 +174,6 @@ namespace ScienceWordOverlay.Models
             if (m == null || u1 == null || u2 == null) return null;
             Vec3 dir = (u2.Pos - u1.Pos).Normalized();
             Vertex3D? bestHit = null; double bestDist = 0.09;
-
             foreach (var e in Edges)
             {
                 if (e == refEdge || e.V1Id == fromVertexId || e.V2Id == fromVertexId) continue;
@@ -251,14 +245,12 @@ namespace ScienceWordOverlay.Models
             else if (kind == "cone")
             {
                 s.Kind = "cone"; s.Name = "Hình nón 3D"; s.IsSolidShaded = true; s.SolidColorHex = "#38BDF8"; s.Radius = 0.95; s.Height = 2.05;
-                AddV("S", "S", 0, s.Height * 0.5, 0);
-                AddV("O", "O", 0, -s.Height * 0.5, 0);
+                AddV("S", "S", 0, s.Height * 0.5, 0); AddV("O", "O", 0, -s.Height * 0.5, 0);
             }
             else if (kind == "cylinder")
             {
                 s.Kind = "cylinder"; s.Name = "Hình trụ 3D"; s.IsSolidShaded = true; s.SolidColorHex = "#34D399"; s.Radius = 0.90; s.Height = 1.90;
-                AddV("O1", "O'", 0, s.Height * 0.5, 0);
-                AddV("O", "O", 0, -s.Height * 0.5, 0);
+                AddV("O1", "O'", 0, s.Height * 0.5, 0); AddV("O", "O", 0, -s.Height * 0.5, 0);
             }
             else if (kind == "sphere")
             {

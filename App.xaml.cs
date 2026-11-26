@@ -14,7 +14,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10 (Nón/Trụ/Cầu khối đặc + Menu nổi + Nút tròn W²) (Tọa độ tương đối theo màn hình) (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.1 (Fix nét đứt Cầu/Nón/Trụ + Khớp tọa độ 0px + Miền S không liên tục) (Tọa độ tương đối theo màn hình) (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
         }
     }
 }
