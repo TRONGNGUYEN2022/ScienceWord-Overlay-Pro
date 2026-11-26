@@ -110,6 +110,7 @@ namespace ScienceWordOverlay.Utils
                     st.Points[i][1] -= screenBoxDip.Top;
                 }
             foreach (var t in rel.Texts) { t.X -= screenBoxDip.Left; t.Y -= screenBoxDip.Top; }
+            foreach (var mf in rel.MathFormulas) { mf.X -= screenBoxDip.Left; mf.Y -= screenBoxDip.Top; }
 
             var payload = new EmbeddedPayload { BoxW = screenBoxDip.Width, BoxH = screenBoxDip.Height, Scene = rel };
             string json = JsonSerializer.Serialize(payload);
@@ -216,6 +217,7 @@ namespace ScienceWordOverlay.Utils
                         st.Points[i][1] = shDip.Top + st.Points[i][1] * sy;
                     }
                 foreach (var t in sc.Texts) { t.X = shDip.Left + t.X * sx; t.Y = shDip.Top + t.Y * sy; }
+                foreach (var mf in sc.MathFormulas) { mf.X = shDip.Left + mf.X * sx; mf.Y = shDip.Top + mf.Y * sy; mf.FontSize = Math.Clamp(mf.FontSize * 0.5 * (sx + sy), 12, 72); }
 
                 dynamic sh = shObj;
                 double wPt = Math.Max(1.0, Convert.ToDouble(sh.Width));

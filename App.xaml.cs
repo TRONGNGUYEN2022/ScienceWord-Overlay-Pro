@@ -14,7 +14,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.2 (Mặt phẳng cắt (P) & Thiết diện 3D + Nét đứt chuẩn + Khớp tọa độ 0px + Miền S rời) (Tọa độ tương đối theo màn hình) (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.3 (Quay 3D trục thẳng đứng + Bút viết mịn đa chất liệu + Text-Math LaTeX + Mặt phẳng cắt (P) + Chèn App 2 chiều) (Tọa độ tương đối theo màn hình) (Mô phỏng Thước, Êke, Compa, Bút 2D & 3D) (Di chuyển khối + Chèn App + Double-Click sửa) sẵn sàng!");
         }
     }
 }

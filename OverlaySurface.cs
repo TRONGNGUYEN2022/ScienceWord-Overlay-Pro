@@ -20,6 +20,8 @@ namespace ScienceWordOverlay
         public event Action<string>? MetricsUpdated;
         public event Action<string, Point?>? ContextMenuRequested;
         public event Action<string>? ActiveToolChanged;
+        public event Action<GeoMathFormula>? MathFormulaEditRequested;
+        public event Action<bool>? VerticalSpinStateChanged;
 
         public SceneState Scene { get; private set; } = new();
         public List<MagicFillLayer> MagicFills { get; } = new();
@@ -44,6 +46,9 @@ namespace ScienceWordOverlay
         public string Volume3DColorHex { get; set; } = "#3B82F6";
         private int _dragRevRegionIdx = -1;
         private bool _dragRevIsEnd = false;
+        private bool _isOrbitingRev3D = false;
+        private readonly DispatcherTimer _verticalSpinTimer;
+        public bool IsSpinningVertical3D { get; private set; } = false;
 
         private static readonly string[] VolumePalette = { "#3B82F6", "#06B6D4", "#10B981", "#8B5CF6", "#F59E0B" };
         private static readonly string[] AreaPalette   = { "#EF4444", "#38BDF8", "#FACC15", "#FB923C", "#34D399", "#EC4899" };
@@ -67,7 +72,7 @@ namespace ScienceWordOverlay
         public string StrokeColorHex { get; set; } = "#0F172A";
         public double StrokeWidth { get; set; } = 2.4;
         public string StrokeDash { get; set; } = "solid";
-        public string PenTipStyle { get; set; } = "solid"; // solid | pencil | brush | dash | highlighter
+        public string PenTipStyle { get; set; } = "fountain"; // fountain | brush | chalk | pencil | dash | highlighter | eraser
         public string FillColorHex { get; set; } = "#3B82F6";
         public double FillOpacity { get; set; } = 0.40;
         public string FillPattern { get; set; } = "solid";
@@ -82,12 +87,20 @@ namespace ScienceWordOverlay
         private FreeStroke? _activeStroke;
         private string? _draggingPointId;
         private string? _draggingTextId;
+        private string? _draggingMathId;
+        private Point _dragMathOffset;
         private string? _selectedPointId;
         private string? _selectedShapeId;
+        private string? _selectedMathId;
+        private long _lastMathClickTick = 0;
+        private string? _lastMathClickId;
+        private Point _lastSmoothedPenPt;
+        private long _lastPenTick = 0;
         // Chọn & Di chuyển toàn bộ nhóm đối tượng (Marquee / HCN / Tự do Lasso)
         private readonly HashSet<string> _selPointIds = new();
         private readonly HashSet<string> _selStrokeIds = new();
         private readonly HashSet<string> _selTextIds = new();
+        private readonly HashSet<string> _selMathIds = new();
         private readonly HashSet<string> _selMagicIds = new();
         private bool _isDraggingGroup = false;
         private Point _groupLastPos;
@@ -123,6 +136,60 @@ namespace ScienceWordOverlay
 
             _animDrawTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _animDrawTimer.Tick += OnAnimDrawTick;
+
+            _verticalSpinTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _verticalSpinTimer.Tick += OnVerticalSpinTick;
+        }
+
+        private void OnVerticalSpinTick(object? sender, EventArgs e)
+        {
+            bool any = false;
+            if (Solid3D != null)
+            {
+                Solid3D.YawDeg = (Solid3D.YawDeg + 1.35) % 360.0;
+                any = true;
+            }
+            if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Solid3D)
+            {
+                RevScene.TurntableYawDeg = (RevScene.TurntableYawDeg + 1.45) % 360.0;
+                any = true;
+            }
+            if (!any) { SetVerticalSpin3D(false); return; }
+            InvalidateVisual();
+        }
+
+        public void SetVerticalSpin3D(bool enabled)
+        {
+            if (enabled && Solid3D == null && (RevScene == null || !RevScene.IsValid))
+            {
+                ShowToast("Hãy tạo 1 khối 3D hoặc bật [Quay V] khối tròn xoay trước khi quay trục đứng!");
+                return;
+            }
+            if (enabled && Solid3D == null && RevScene != null && RevScene.IsValid && RevMode != MathRenderMode.Solid3D)
+            {
+                RevMode = MathRenderMode.Solid3D;
+                if (RevSweepDeg < 30.0) RevSweepDeg = 360.0;
+            }
+            IsSpinningVertical3D = enabled;
+            if (enabled) _verticalSpinTimer.Start(); else _verticalSpinTimer.Stop();
+            VerticalSpinStateChanged?.Invoke(enabled);
+            if (Solid3D != null) RefreshSolid3DMenu();
+            else if (RevScene != null && RevScene.IsValid) RefreshRevMenu();
+            InvalidateVisual();
+            ShowToast(enabled ? "🔄 Đang quay khối 3D quanh trục thẳng đứng (nhấn lần nữa để dừng)!" : "⏸ Đã dừng quay trục đứng.");
+        }
+
+        public void ToggleVerticalSpin3D() => SetVerticalSpin3D(!IsSpinningVertical3D);
+
+        public void ResetRevTurntable()
+        {
+            if (RevScene == null) return;
+            if (Solid3D == null && IsSpinningVertical3D) SetVerticalSpin3D(false);
+            RevScene.TurntableYawDeg = 0.0;
+            RevScene.TurntablePitchDeg = 0.0;
+            InvalidateVisual();
+            RefreshRevMenu();
+            ShowToast("↺ Đã đưa khối tròn xoay về góc chuẩn 0° khớp với hình gốc!");
         }
 
         private void OnAnimDrawTick(object? sender, EventArgs e)
@@ -249,7 +316,7 @@ namespace ScienceWordOverlay
         }
 
         public void ScaleSolid3D(double factor) { if (Solid3D == null) return; Solid3D.Scale = Math.Clamp(Solid3D.Scale * factor, 55.0, 290.0); InvalidateVisual(); RefreshSolid3DMenu(); }
-        public void DeleteSolid3D() { Solid3D = null; _step3DVertices.Clear(); _pending3DParallelVertex = null; ContextMenuRequested?.Invoke("", null); InvalidateVisual(); ShowToast("Đã xóa khối 3D"); }
+        public void DeleteSolid3D() { Solid3D = null; if (RevScene == null) SetVerticalSpin3D(false); _step3DVertices.Clear(); _pending3DParallelVertex = null; ContextMenuRequested?.Invoke("", null); InvalidateVisual(); ShowToast("Đã xóa khối 3D"); }
 
         public void SpawnInteractiveCutPlane3D()
         {
@@ -303,6 +370,140 @@ namespace ScienceWordOverlay
             Solid3D.SplitAmount = 0.0;
             InvalidateVisual(); RefreshSolid3DMenu();
             ShowToast("Đã gỡ Mặt phẳng cắt (P)");
+        }
+
+        // ================= TEXT-MATH & CHỮ VIẾT TAY TƯƠNG TÁC =================
+        public void AddOrUpdateMathFormula(string? existingId, string latex, string colorHex, double fontSize, bool forceMath)
+        {
+            SaveHistory();
+            if (!string.IsNullOrEmpty(existingId))
+            {
+                var found = Scene.MathFormulas.FirstOrDefault(m => m.Id == existingId);
+                if (found != null)
+                {
+                    found.Latex = latex;
+                    found.ColorHex = colorHex;
+                    found.FontSize = fontSize;
+                    found.ForceMath = forceMath;
+                    _selectedMathId = found.Id;
+                    InvalidateVisual(); RefreshMathMenu();
+                    ShowToast("✓ Đã cập nhật công thức toán!");
+                    return;
+                }
+            }
+            double cx = ActualWidth > 200 ? ActualWidth * 0.42 : 420;
+            double cy = ActualHeight > 200 ? ActualHeight * 0.36 : 260;
+            int offset = (Scene.MathFormulas.Count % 6) * 24;
+            var mf = new GeoMathFormula
+            {
+                Id = GenId("math"),
+                X = cx + offset,
+                Y = cy + offset,
+                Latex = latex,
+                ColorHex = colorHex,
+                FontSize = fontSize,
+                ForceMath = forceMath
+            };
+            Scene.MathFormulas.Add(mf);
+            ClearGroupSelection();
+            _selectedMathId = mf.Id;
+            _selMathIds.Add(mf.Id);
+            SetTool("select");
+            InvalidateVisual(); RefreshMathMenu();
+            ShowToast("Đã chèn công thức lên bảng vẽ! Kéo để di chuyển, nháy đúp để sửa, bấm [Chèn App] để đưa vào Word/App.", 4200);
+        }
+
+        public void AddHandwritingStrokes(List<FreeStroke> padStrokes)
+        {
+            if (padStrokes.Count == 0) return;
+            SaveHistory();
+            double minX = double.MaxValue, minY = double.MaxValue;
+            foreach (var st in padStrokes) foreach (var pt in st.Points) { if (pt[0] < minX) minX = pt[0]; if (pt[1] < minY) minY = pt[1]; }
+            double baseX = ActualWidth > 200 ? ActualWidth * 0.38 : 360;
+            double baseY = ActualHeight > 200 ? ActualHeight * 0.36 : 260;
+            ClearGroupSelection();
+            foreach (var st in padStrokes)
+            {
+                var clone = new FreeStroke
+                {
+                    Id = GenId("strk"),
+                    ColorHex = st.ColorHex,
+                    Width = st.Width,
+                    Opacity = st.Opacity,
+                    IsHighlighter = st.IsHighlighter,
+                    PenStyle = st.PenStyle,
+                    PointWidths = new List<double>(st.PointWidths),
+                    Points = st.Points.Select(p => new[] { baseX + (p[0] - minX), baseY + (p[1] - minY) }).ToList()
+                };
+                Scene.Strokes.Add(clone);
+                _selStrokeIds.Add(clone.Id);
+            }
+            SetTool("select");
+            InvalidateVisual(); Refresh2DMenu();
+            ShowToast("Đã chèn chữ viết tay lên bảng vẽ! Kéo để đặt vị trí rồi bấm [Chèn App].", 4000);
+        }
+
+        public void InsertFormulaDirectlyToApp(string latex, string colorHex, double fontSize, bool forceMath)
+        {
+            AddOrUpdateMathFormula(null, latex, colorHex, fontSize, forceMath);
+            InsertIntoTargetApp();
+        }
+
+        public void InsertStrokesDirectlyToApp(List<FreeStroke> padStrokes)
+        {
+            AddHandwritingStrokes(padStrokes);
+            InsertIntoTargetApp();
+        }
+
+        public void EditSelectedMathFormula()
+        {
+            var mf = Scene.MathFormulas.FirstOrDefault(m => m.Id == _selectedMathId || _selMathIds.Contains(m.Id));
+            if (mf != null) MathFormulaEditRequested?.Invoke(mf);
+        }
+
+        public void ScaleSelectedMathFormula(double deltaPx)
+        {
+            var mf = Scene.MathFormulas.FirstOrDefault(m => m.Id == _selectedMathId || _selMathIds.Contains(m.Id));
+            if (mf == null) return;
+            SaveHistory();
+            mf.FontSize = Math.Clamp(mf.FontSize + deltaPx, 12.0, 72.0);
+            InvalidateVisual(); RefreshMathMenu();
+        }
+
+        public void CycleSelectedMathColor()
+        {
+            var mf = Scene.MathFormulas.FirstOrDefault(m => m.Id == _selectedMathId || _selMathIds.Contains(m.Id));
+            if (mf == null) return;
+            _strokeCycleIdx = (_strokeCycleIdx + 1) % StrokePalette.Length;
+            SaveHistory();
+            mf.ColorHex = StrokePalette[_strokeCycleIdx];
+            InvalidateVisual(); RefreshMathMenu();
+        }
+
+        private Rect GetMathFormulaRect(GeoMathFormula mf)
+        {
+            double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var (w, h) = LatexMathRenderer.Measure(mf.Latex, mf.FontSize, dpi, mf.ForceMath);
+            return new Rect(mf.X, mf.Y, w, h);
+        }
+
+        private GeoMathFormula? FindNearestMathFormula(Point pos)
+        {
+            for (int i = Scene.MathFormulas.Count - 1; i >= 0; i--)
+            {
+                var r = GetMathFormulaRect(Scene.MathFormulas[i]);
+                r.Inflate(6, 6);
+                if (r.Contains(pos)) return Scene.MathFormulas[i];
+            }
+            return null;
+        }
+
+        private void RefreshMathMenu()
+        {
+            var mf = Scene.MathFormulas.FirstOrDefault(m => m.Id == _selectedMathId || _selMathIds.Contains(m.Id));
+            if (mf == null) return;
+            var r = GetMathFormulaRect(mf);
+            ContextMenuRequested?.Invoke("math", new Point(r.Left, r.Top));
         }
 
         public void CycleSelected2DStrokeColor()
@@ -533,13 +734,14 @@ namespace ScienceWordOverlay
 
         private void ClearGroupSelection()
         {
-            _selPointIds.Clear(); _selStrokeIds.Clear(); _selTextIds.Clear(); _selMagicIds.Clear();
+            _selPointIds.Clear(); _selStrokeIds.Clear(); _selTextIds.Clear(); _selMathIds.Clear(); _selMagicIds.Clear();
+            _selectedMathId = null;
             _isDraggingGroup = false;
             _marqueeRect = null;
         }
 
         private bool HasGroupSelection() =>
-            _selPointIds.Count > 0 || _selStrokeIds.Count > 0 || _selTextIds.Count > 0 || _selMagicIds.Count > 0;
+            _selPointIds.Count > 0 || _selStrokeIds.Count > 0 || _selTextIds.Count > 0 || _selMathIds.Count > 0 || _selMagicIds.Count > 0;
 
         private Rect? GetGroupSelectionBounds()
         {
@@ -554,6 +756,11 @@ namespace ScienceWordOverlay
             {
                 var t = Scene.Texts.FirstOrDefault(x => x.Id == tid);
                 if (t != null) { xs.Add(t.X); xs.Add(t.X + Math.Max(20, t.Text.Length * 11)); ys.Add(t.Y - 16); ys.Add(t.Y + 16); }
+            }
+            foreach (var mfid in _selMathIds)
+            {
+                var mf = Scene.MathFormulas.FirstOrDefault(x => x.Id == mfid);
+                if (mf != null) { var r = GetMathFormulaRect(mf); xs.Add(r.Left); xs.Add(r.Right); ys.Add(r.Top); ys.Add(r.Bottom); }
             }
             foreach (var mid in _selMagicIds)
             {
@@ -583,12 +790,13 @@ namespace ScienceWordOverlay
             foreach (var p in Scene.Points) if (inside(new Point(p.X, p.Y))) _selPointIds.Add(p.Id);
             foreach (var st in Scene.Strokes) if (st.Points.Any(pt => inside(new Point(pt[0], pt[1])))) _selStrokeIds.Add(st.Id);
             foreach (var t in Scene.Texts) if (inside(new Point(t.X, t.Y))) _selTextIds.Add(t.Id);
+            foreach (var mf in Scene.MathFormulas) { var r = GetMathFormulaRect(mf); if (inside(new Point(r.Left + r.Width * 0.5, r.Top + r.Height * 0.5))) _selMathIds.Add(mf.Id); }
             foreach (var mf in MagicFills)
             {
                 Point c = new(mf.BoundsDip.Left + mf.BoundsDip.Width * 0.5, mf.BoundsDip.Top + mf.BoundsDip.Height * 0.5);
                 if (inside(c)) _selMagicIds.Add(mf.Id);
             }
-            int total = _selPointIds.Count + _selStrokeIds.Count + _selTextIds.Count + _selMagicIds.Count;
+            int total = _selPointIds.Count + _selStrokeIds.Count + _selTextIds.Count + _selMathIds.Count + _selMagicIds.Count;
             if (total > 0)
                 ShowToast($"Đã chọn {total} đối tượng! Kéo bên trong khung xanh để di chuyển toàn bộ, hoặc nhấn Delete để xóa.", 3800);
         }
@@ -605,6 +813,11 @@ namespace ScienceWordOverlay
             {
                 var t = Scene.Texts.FirstOrDefault(x => x.Id == tid);
                 if (t != null) { t.X += dx; t.Y += dy; }
+            }
+            foreach (var mfid in _selMathIds)
+            {
+                var mf = Scene.MathFormulas.FirstOrDefault(x => x.Id == mfid);
+                if (mf != null) { mf.X += dx; mf.Y += dy; }
             }
             foreach (var mid in _selMagicIds)
             {
@@ -1023,6 +1236,10 @@ namespace ScienceWordOverlay
                 {
                     _isOrbiting3D = true; _orbitLastPos = pos; CaptureMouse(); RefreshSolid3DMenu(); return;
                 }
+                if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Solid3D)
+                {
+                    _isOrbitingRev3D = true; _orbitLastPos = pos; CaptureMouse(); RefreshRevMenu(); return;
+                }
                 if (RevScene != null && RevScene.IsValid && TryHitRevRegion(pos, out int rIdx))
                 {
                     RevScene.Regions[rIdx].Enabled = !RevScene.Regions[rIdx].Enabled;
@@ -1277,6 +1494,23 @@ namespace ScienceWordOverlay
 
             if (Tool == "select")
             {
+                var mHit = FindNearestMathFormula(pos);
+                if (mHit != null)
+                {
+                    long now = Environment.TickCount64;
+                    if (_lastMathClickId == mHit.Id && (now - _lastMathClickTick) < 380)
+                    {
+                        _lastMathClickId = null;
+                        _selectedMathId = mHit.Id;
+                        MathFormulaEditRequested?.Invoke(mHit);
+                        return;
+                    }
+                    _lastMathClickId = mHit.Id; _lastMathClickTick = now;
+                    ClearGroupSelection(); SaveHistory();
+                    _selectedMathId = mHit.Id; _selMathIds.Add(mHit.Id);
+                    _draggingMathId = mHit.Id; _dragMathOffset = new Point(pos.X - mHit.X, pos.Y - mHit.Y);
+                    CaptureMouse(); InvalidateVisual(); RefreshMathMenu(); return;
+                }
                 var pt = FindNearestPoint(pos, 13.0);
                 if (pt != null) { ClearGroupSelection(); SaveHistory(); _draggingPointId = pt.Id; _selectedPointId = pt.Id; _selectedShapeId = null; _selPointIds.Add(pt.Id); CaptureMouse(); InvalidateVisual(); Refresh2DMenu(); return; }
                 var txt = FindNearestText(pos);
@@ -1294,23 +1528,31 @@ namespace ScienceWordOverlay
                 return;
             }
 
-            if (Tool is "pen" or "highlighter")
+            if (Tool is "pen" or "highlighter" or "eraser")
             {
+                string pStyle = Tool == "eraser" ? "eraser" : (Tool == "highlighter" ? "highlighter" : PenTipStyle);
+                if (pStyle == "eraser")
+                {
+                    SaveHistory();
+                    EraseStrokesNear(pos);
+                    CaptureMouse(); InvalidateVisual(); return;
+                }
                 SaveHistory();
-                string pStyle = Tool == "highlighter" ? "highlighter" : PenTipStyle;
                 bool isHl = pStyle == "highlighter";
-                double baseW = isHl ? Math.Max(16.0, StrokeWidth * 5.0) : Math.Max(1.6, StrokeWidth);
+                double baseW = isHl ? Math.Max(16.0, StrokeWidth * 4.5) : (pStyle == "chalk" ? Math.Max(3.2, StrokeWidth * 1.4) : Math.Max(1.4, StrokeWidth));
                 _activeStroke = new FreeStroke
                 {
                     Id = GenId("strk"),
                     ColorHex = isHl ? FillColorHex : StrokeColorHex,
                     Width = baseW,
-                    Opacity = isHl ? 0.36 : (pStyle == "pencil" ? 0.82 : 1.0),
+                    Opacity = isHl ? 0.36 : (pStyle == "pencil" ? 0.80 : (pStyle == "chalk" ? 0.90 : 1.0)),
                     IsHighlighter = isHl,
                     PenStyle = pStyle
                 };
                 _activeStroke.Points.Add(new[] { pos.X, pos.Y });
                 _activeStroke.PointWidths.Add(baseW);
+                _lastSmoothedPenPt = pos;
+                _lastPenTick = Environment.TickCount64;
                 Scene.Strokes.Add(_activeStroke);
                 CaptureMouse(); InvalidateVisual(); return;
             }
@@ -1451,6 +1693,12 @@ namespace ScienceWordOverlay
                 Solid3D.PitchDeg = Math.Clamp(Solid3D.PitchDeg + (pos.Y - _orbitLastPos.Y) * 0.45, -75, 75);
                 _orbitLastPos = pos; InvalidateVisual(); return;
             }
+            if (_isOrbitingRev3D && RevScene != null && RevScene.IsValid)
+            {
+                RevScene.TurntableYawDeg = (RevScene.TurntableYawDeg + (pos.X - _orbitLastPos.X) * 0.65) % 360.0;
+                RevScene.TurntablePitchDeg = Math.Clamp(RevScene.TurntablePitchDeg + (pos.Y - _orbitLastPos.Y) * 0.35, -55, 55);
+                _orbitLastPos = pos; InvalidateVisual(); return;
+            }
             if (_dragRevRegionIdx >= 0 && RevScene != null && RevScene.IsValid)
             {
                 double dx = pos.X - RevScene.AxisOrigin.X, dy = pos.Y - RevScene.AxisOrigin.Y;
@@ -1481,23 +1729,45 @@ namespace ScienceWordOverlay
                 return;
             }
 
+            if (_draggingMathId != null)
+            {
+                var mf = Scene.MathFormulas.FirstOrDefault(m => m.Id == _draggingMathId);
+                if (mf != null) { mf.X = pos.X - _dragMathOffset.X; mf.Y = pos.Y - _dragMathOffset.Y; }
+                InvalidateVisual(); RefreshMathMenu(); return;
+            }
             if (_draggingPointId != null) { var pt = GetPoint(_draggingPointId); if (pt != null) { pt.X = pos.X; pt.Y = pos.Y; } InvalidateVisual(); return; }
             if (_draggingTextId != null) { var txt = Scene.Texts.FirstOrDefault(t => t.Id == _draggingTextId); if (txt != null) { txt.X = pos.X; txt.Y = pos.Y; } InvalidateVisual(); return; }
+            if (e.LeftButton == MouseButtonState.Pressed && (Tool == "eraser" || (Tool == "pen" && PenTipStyle == "eraser")))
+            {
+                if (EraseStrokesNear(pos)) InvalidateVisual();
+                return;
+            }
             if (_activeStroke != null)
             {
-                var last = _activeStroke.Points[^1];
-                double d = Hypot(pos.X - last[0], pos.Y - last[1]);
-                if (d >= 1.8)
+                // Loc lam muot EMA giup net chu viet tay mem mai, khong gap khuc nhu clip
+                Point sm = new(_lastSmoothedPenPt.X * 0.42 + pos.X * 0.58, _lastSmoothedPenPt.Y * 0.42 + pos.Y * 0.58);
+                double d = Hypot(sm.X - _lastSmoothedPenPt.X, sm.Y - _lastSmoothedPenPt.Y);
+                if (d >= 1.35)
                 {
-                    _activeStroke.Points.Add(new[] { pos.X, pos.Y });
+                    long now = Environment.TickCount64;
+                    double dt = Math.Max(1.0, now - _lastPenTick);
+                    double vel = d / dt;
+                    _activeStroke.Points.Add(new[] { sm.X, sm.Y });
                     double w = _activeStroke.Width;
+                    double prevW = _activeStroke.PointWidths.Count > 0 ? _activeStroke.PointWidths[^1] : w;
                     if (_activeStroke.PenStyle == "brush")
                     {
-                        double prevW = _activeStroke.PointWidths.Count > 0 ? _activeStroke.PointWidths[^1] : w;
-                        double targetW = Math.Clamp(w * (1.75 - Math.Min(1.2, d / 18.0)), Math.Max(1.0, w * 0.35), w * 2.1);
-                        w = prevW * 0.6 + targetW * 0.4;
+                        double targetW = Math.Clamp(w * (1.85 - Math.Min(1.25, vel * 0.72)), Math.Max(1.0, w * 0.36), w * 2.15);
+                        w = prevW * 0.64 + targetW * 0.36;
+                    }
+                    else if (_activeStroke.PenStyle is "fountain" or "solid")
+                    {
+                        double targetW = Math.Clamp(w * (1.16 - Math.Min(0.36, vel * 0.24)), Math.Max(0.9, w * 0.74), w * 1.22);
+                        w = prevW * 0.68 + targetW * 0.32;
                     }
                     _activeStroke.PointWidths.Add(w);
+                    _lastSmoothedPenPt = sm;
+                    _lastPenTick = now;
                 }
                 InvalidateVisual(); return;
             }
@@ -1538,8 +1808,8 @@ namespace ScienceWordOverlay
             }
             if (wasDraggingGroup) Refresh2DMenu();
             _dragRevRegionIdx = -1;
-            _isOrbiting3D = false; _isMoving3D = false;
-            _draggingPointId = null; _draggingTextId = null; _activeStroke = null;
+            _isOrbiting3D = false; _isMoving3D = false; _isOrbitingRev3D = false;
+            _draggingPointId = null; _draggingTextId = null; _draggingMathId = null; _activeStroke = null;
             if (IsMouseCaptured) ReleaseMouseCapture();
         }
 
@@ -1568,7 +1838,9 @@ namespace ScienceWordOverlay
                 Scene.Markers.RemoveAll(m => _selPointIds.Contains(m.P1Id) || _selPointIds.Contains(m.VertexId) || _selPointIds.Contains(m.P2Id));
                 Scene.Strokes.RemoveAll(st => _selStrokeIds.Contains(st.Id));
                 Scene.Texts.RemoveAll(t => _selTextIds.Contains(t.Id));
+                Scene.MathFormulas.RemoveAll(m => _selMathIds.Contains(m.Id));
                 MagicFills.RemoveAll(mf => _selMagicIds.Contains(mf.Id));
+                ContextMenuRequested?.Invoke("", null);
                 ClearGroupSelection();
                 InvalidateVisual();
                 ShowToast("Đã xóa toàn bộ nhóm đối tượng đang chọn!");
@@ -1582,6 +1854,12 @@ namespace ScienceWordOverlay
                 Scene.Regions.RemoveAll(r => r.PointIds.Contains(pid)); Scene.Markers.RemoveAll(m => m.P1Id == pid || m.VertexId == pid || m.P2Id == pid);
                 _selectedPointId = null; InvalidateVisual(); ShowToast("Đã xóa điểm và các cạnh liên quan");
             }
+        }
+
+        private bool EraseStrokesNear(Point pos)
+        {
+            int removed = Scene.Strokes.RemoveAll(st => st.Points.Any(pt => Hypot(pt[0] - pos.X, pt[1] - pos.Y) <= 14.0));
+            return removed > 0;
         }
 
         // ================= RENDERING =================
@@ -1718,19 +1996,22 @@ namespace ScienceWordOverlay
                 else dc.DrawLine(pen, pt1, pt2);
             }
 
-            // 4. Nét vẽ tay đa chất liệu (Bút bi, Bút chì, Bút cọ thư pháp, Nét đứt, Dạ quang)
+            // 4. Nét vẽ tay đa chất liệu mượt mà (Bút máy, Bút cọ thanh đậm, Phấn bảng, Bút chì, Nét đứt, Dạ quang)
             foreach (var st in Scene.Strokes)
             {
                 if (st.Points.Count < 2) continue;
-                string pStyle = st.IsHighlighter ? "highlighter" : (st.PenStyle ?? "solid");
+                string pStyle = st.IsHighlighter ? "highlighter" : (st.PenStyle ?? "fountain");
 
-                if (pStyle == "brush" && st.PointWidths.Count == st.Points.Count)
+                if ((pStyle is "brush" or "fountain") && st.PointWidths.Count == st.Points.Count)
                 {
                     var br = new SolidColorBrush(ParseColor(st.ColorHex, st.Opacity));
                     for (int i = 0; i < st.Points.Count - 1; i++)
                     {
-                        var segPen = new Pen(br, Math.Max(1.0, st.PointWidths[i])) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-                        dc.DrawLine(segPen, new Point(st.Points[i][0], st.Points[i][1]), new Point(st.Points[i + 1][0], st.Points[i + 1][1]));
+                        Point p0 = new(st.Points[i][0], st.Points[i][1]);
+                        Point p1 = new(st.Points[i + 1][0], st.Points[i + 1][1]);
+                        double segW = Math.Max(0.9, 0.5 * (st.PointWidths[i] + st.PointWidths[i + 1]));
+                        var segPen = new Pen(br, segW) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                        dc.DrawLine(segPen, p0, p1);
                     }
                     continue;
                 }
@@ -1745,7 +2026,16 @@ namespace ScienceWordOverlay
                 }
                 geo.Freeze();
 
-                if (pStyle == "pencil")
+                if (pStyle == "chalk")
+                {
+                    var dustPen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.24)), st.Width * 1.95) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                    var midPen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.58)), st.Width * 1.25) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                    var corePen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.94)), Math.Max(1.2, st.Width * 0.78)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+                    dc.DrawGeometry(null, dustPen, geo);
+                    dc.DrawGeometry(null, midPen, geo);
+                    dc.DrawGeometry(null, corePen, geo);
+                }
+                else if (pStyle == "pencil")
                 {
                     var softPen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.28)), st.Width * 1.65) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
                     var corePen = new Pen(new SolidColorBrush(ParseColor(st.ColorHex, 0.85)), Math.Max(1.1, st.Width * 0.82)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
@@ -1758,19 +2048,30 @@ namespace ScienceWordOverlay
                     {
                         StartLineCap = pStyle == "highlighter" ? PenLineCap.Flat : PenLineCap.Round,
                         EndLineCap = pStyle == "highlighter" ? PenLineCap.Flat : PenLineCap.Round,
+                        DashCap = PenLineCap.Flat,
                         LineJoin = PenLineJoin.Round
                     };
-                    if (pStyle == "dash") pen.DashStyle = new DashStyle(new double[] { 4.8, 3.2 }, 0);
+                    if (pStyle == "dash") pen.DashStyle = new DashStyle(new double[] { 5.0, 3.8 }, 0);
                     dc.DrawGeometry(null, pen, geo);
                 }
             }
 
-            // 5. Chữ
+            // 5. Chữ & Công thức Toán học (Text-Math LaTeX)
             var mathTypeface = new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
             foreach (var t in Scene.Texts)
             {
                 var ft = new FormattedText(t.Text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, mathTypeface, t.FontSize, new SolidColorBrush(ParseColor(t.ColorHex)), dpi);
                 dc.DrawText(ft, new Point(t.X, t.Y - ft.Height / 2));
+            }
+            foreach (var mf in Scene.MathFormulas)
+            {
+                Rect r = LatexMathRenderer.Draw(dc, mf.Latex, new Point(mf.X, mf.Y), ParseColor(mf.ColorHex, 1.0), mf.FontSize, dpi, mf.ForceMath);
+                if (!cleanExport && (mf.Id == _selectedMathId || _selMathIds.Contains(mf.Id)))
+                {
+                    var selRect = new Rect(r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8);
+                    dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(18, 37, 99, 235)),
+                        new Pen(new SolidColorBrush(Color.FromRgb(37, 99, 235)), 1.5) { DashStyle = DashStyles.Dash }, selRect, 5, 5);
+                }
             }
 
             // 6. Điểm & Tên đỉnh
@@ -1982,6 +2283,17 @@ namespace ScienceWordOverlay
             Vec3 lightDir = new Vec3(-0.32, 0.62, 0.72).Normalized();
             var lblTf = new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
             Color lblCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard) ? Colors.White : Color.FromRgb(15, 23, 42);
+
+            if (!cleanExport && IsSpinningVertical3D)
+            {
+                Point pTopAxis = s.Project(new Vec3(0, 1.65, 0), out _);
+                Point pBotAxis = s.Project(new Vec3(0, -1.35, 0), out _);
+                dc.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(150, 56, 189, 248)), 1.35) { DashStyle = DashStyles.Dash }, pBotAxis, pTopAxis);
+                double yawNorm = ((s.YawDeg % 360.0) + 360.0) % 360.0;
+                var ftSpin = new FormattedText($"⟳ {yawNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal), 11.5, new SolidColorBrush(Color.FromRgb(56, 189, 248)), dpi);
+                dc.DrawText(ftSpin, new Point(pTopAxis.X + 6, pTopAxis.Y - 6));
+            }
 
             void Draw3DLabel(Vec3 p3, string lbl, bool dot = true)
             {
@@ -2309,21 +2621,23 @@ namespace ScienceWordOverlay
             Color volBaseCol = ParseColor(Volume3DColorHex, 1.0);
             var lblTf = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
 
-            void DrawPlanarSlice(double a, double b, string hexCol, double opacity, bool isSelectedBorder)
+            Point MapSlicePt(double t, double r, bool use3D) => use3D ? s.Project3D(t, r, 0.0, RevXCompression) : s.ToScreen2D(t, r);
+
+            void DrawPlanarSlice(double a, double b, string hexCol, double opacity, bool isSelectedBorder, bool use3D = false)
             {
                 if (b - a < 1.5) return;
                 int steps = 64;
                 var poly = new List<Point>(steps * 2 + 2);
-                for (int i = 0; i <= steps; i++) { double t = a + (b - a) * i / steps; poly.Add(s.ToScreen2D(t, RevolutionScene.SampleR(s.Curve1TR, t))); }
-                for (int i = steps; i >= 0; i--) { double t = a + (b - a) * i / steps; poly.Add(s.ToScreen2D(t, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, t) : 0.0)); }
+                for (int i = 0; i <= steps; i++) { double t = a + (b - a) * i / steps; poly.Add(MapSlicePt(t, RevolutionScene.SampleR(s.Curve1TR, t), use3D)); }
+                for (int i = steps; i >= 0; i--) { double t = a + (b - a) * i / steps; poly.Add(MapSlicePt(t, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, t) : 0.0, use3D)); }
                 var geo = new StreamGeometry(); using (var ctx = geo.Open()) { ctx.BeginFigure(poly[0], true, true); ctx.PolyLineTo(poly.Skip(1).ToList(), true, false); }
                 geo.Freeze();
                 Color c = ParseColor(hexCol, 1.0);
                 Pen borderPen = isSelectedBorder ? new Pen(new SolidColorBrush(ShadeColor(c, 0.55, 0.95)), 2.2) : new Pen(new SolidColorBrush(ShadeColor(c, 0.72, 0.75)), 1.2);
                 dc.DrawGeometry(MakeRegionBrush(hexCol, opacity, FillPattern), borderPen, geo);
                 var boundPen = new Pen(new SolidColorBrush(ShadeColor(c, 0.65, Math.Min(1.0, opacity + 0.35))), 1.5) { DashStyle = DashStyles.Dash };
-                dc.DrawLine(boundPen, s.ToScreen2D(a, RevolutionScene.SampleR(s.Curve1TR, a)), s.ToScreen2D(a, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, a) : 0));
-                dc.DrawLine(boundPen, s.ToScreen2D(b, RevolutionScene.SampleR(s.Curve1TR, b)), s.ToScreen2D(b, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, b) : 0));
+                dc.DrawLine(boundPen, MapSlicePt(a, RevolutionScene.SampleR(s.Curve1TR, a), use3D), MapSlicePt(a, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, a) : 0, use3D));
+                dc.DrawLine(boundPen, MapSlicePt(b, RevolutionScene.SampleR(s.Curve1TR, b), use3D), MapSlicePt(b, s.HasTwoCurves ? RevolutionScene.SampleR(s.Curve2TR, b) : 0, use3D));
             }
 
             if (RevMode == MathRenderMode.Area2D)
@@ -2371,7 +2685,8 @@ namespace ScienceWordOverlay
                                 double nx = slopeN * 0.4, ny = Math.Cos(thMid) * signR, nz = Math.Sin(thMid) * signR;
                                 double nLen = Math.Sqrt(nx * nx + ny * ny + nz * nz); if (nLen > 1e-5) { nx /= nLen; ny /= nLen; nz /= nLen; }
                                 double sxN = nx * s.AxisU.X + ny * s.AxisV.X, syN = nx * s.AxisU.Y + ny * s.AxisV.Y;
-                                double light = Math.Clamp(0.54 + 0.48 * Math.Max(-0.35, sxN * -0.25 + syN * -0.55 + nz * 0.78), 0.30, 1.25);
+                                var rotN = s.RotateNormal3D(sxN, syN, nz);
+                                double light = Math.Clamp(0.54 + 0.48 * Math.Max(-0.35, rotN.nx * -0.25 + rotN.ny * -0.55 + rotN.nz * 0.78), 0.30, 1.25);
                                 quads.Add((new[] { grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1] }, depth, ShadeColor(volBaseCol, light, Math.Max(0.42, FillOpacity + 0.22))));
                             }
                         }
@@ -2380,12 +2695,12 @@ namespace ScienceWordOverlay
                             void AddCap(double tEnd, double rEnd, double sideSign)
                             {
                                 if (Math.Abs(rEnd) < 1.0) return;
-                                Point center = s.ToScreen2D(tEnd, 0);
+                                Point center = s.Project3D(tEnd, 0, 0, RevXCompression);
                                 Color capCol = ShadeColor(volBaseCol, sideSign > 0 ? 0.92 : 0.72, Math.Min(0.92, FillOpacity + 0.32));
                                 for (int j = 0; j < nAng; j++)
                                 {
                                     double th0 = maxRad * j / nAng, th1 = maxRad * (j + 1) / nAng;
-                                    quads.Add((new[] { center, s.Project3D(tEnd, rEnd, th0, RevXCompression), s.Project3D(tEnd, rEnd, th1, RevXCompression) }, s.ComputeDepth(tEnd, rEnd * 0.55, 0.5 * (th0 + th1)) + sideSign * 0.03, capCol));
+                                    quads.Add((new[] { center, s.Project3D(tEnd, rEnd, th0, RevXCompression), s.Project3D(tEnd, rEnd, th1, RevXCompression) }, s.ComputeDepth(tEnd, rEnd * 0.55, 0.5 * (th0 + th1), RevXCompression) + sideSign * 0.03, capCol));
                                 }
                             }
                             AddCap(ts[0], rs[0], -1); AddCap(ts[nT], rs[nT], 1);
@@ -2400,7 +2715,16 @@ namespace ScienceWordOverlay
                     foreach (var ring in rings) { var gRing = new StreamGeometry(); using (var ctx = gRing.Open()) { ctx.BeginFigure(ring[0], false, false); for (int j = 1; j < ring.Length; j++) ctx.LineTo(ring[j], true, false); } gRing.Freeze(); dc.DrawGeometry(null, rimPen, gRing); }
                 }
                 if (RevShowAreaIn3D || RevSweepDeg < 1.0)
-                    foreach (var rg in s.Regions) if (rg.Enabled) DrawPlanarSlice(rg.StartT, rg.EndT, rg.ColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false);
+                    foreach (var rg in s.Regions) if (rg.Enabled) DrawPlanarSlice(rg.StartT, rg.EndT, rg.ColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false, use3D: s.HasTurntableRotation);
+                if (!cleanExport && (s.HasTurntableRotation || IsSpinningVertical3D))
+                {
+                    Point pv = s.GetPivotScreenCenter();
+                    var axisPen = new Pen(new SolidColorBrush(Color.FromArgb(145, 56, 189, 248)), 1.3) { DashStyle = DashStyles.Dash };
+                    dc.DrawLine(axisPen, new Point(pv.X, pv.Y - 115), new Point(pv.X, pv.Y + 115));
+                    double angNorm = ((s.TurntableYawDeg % 360.0) + 360.0) % 360.0;
+                    var ftYaw = new FormattedText($"⟳ Trục đứng: {angNorm:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, lblTf, 11.5, new SolidColorBrush(Color.FromRgb(2, 132, 199)), dpi);
+                    dc.DrawText(ftYaw, new Point(pv.X + 8, pv.Y - 112));
+                }
             }
 
             if (!cleanExport && Tool == "add_bound")
@@ -2798,6 +3122,12 @@ namespace ScienceWordOverlay
             {
                 xs.Add(t.X - 4); xs.Add(t.X + Math.Max(24, t.Text.Length * (t.FontSize * 0.68)) + 8);
                 ys.Add(t.Y - t.FontSize * 0.8); ys.Add(t.Y + t.FontSize * 0.8);
+            }
+            foreach (var mf in Scene.MathFormulas)
+            {
+                var r = GetMathFormulaRect(mf);
+                xs.Add(r.Left - 4); xs.Add(r.Right + 4);
+                ys.Add(r.Top - 4); ys.Add(r.Bottom + 4);
             }
             if (xs.Count == 0) return null;
             double pad = 22;

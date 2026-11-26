@@ -88,11 +88,12 @@ namespace ScienceWordOverlay.Utils
                     st.Points[i][1] -= screenBoxDip.Top;
                 }
             foreach (var t in rel.Texts) { t.X -= screenBoxDip.Left; t.Y -= screenBoxDip.Top; }
+            foreach (var mf in rel.MathFormulas) { mf.X -= screenBoxDip.Left; mf.Y -= screenBoxDip.Top; }
 
             var ptNames = rel.Points.Where(p => !string.IsNullOrWhiteSpace(p.Label)).Select(p => p.Label).Take(6).ToList();
             string desc = ptNames.Count > 0
                 ? $"Hình ({string.Join(",", ptNames)})"
-                : (rel.Strokes.Count > 0 ? $"Nét bút ({rel.Strokes.Count} nét)" : "Hình vẽ");
+                : (rel.MathFormulas.Count > 0 ? $"Công thức ({rel.MathFormulas.Count})" : (rel.Strokes.Count > 0 ? $"Nét bút ({rel.Strokes.Count} nét)" : "Hình vẽ"));
 
             var entry = new SavedSceneEntry
             {
@@ -132,6 +133,11 @@ namespace ScienceWordOverlay.Utils
             {
                 t.X = targetTopLeftDip.X + t.X * scaleX;
                 t.Y = targetTopLeftDip.Y + t.Y * scaleY;
+            }
+            foreach (var mf in sc.MathFormulas)
+            {
+                mf.X = targetTopLeftDip.X + mf.X * scaleX;
+                mf.Y = targetTopLeftDip.Y + mf.Y * scaleY;
             }
             return sc;
         }

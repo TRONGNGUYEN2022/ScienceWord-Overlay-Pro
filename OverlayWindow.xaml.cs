@@ -69,7 +69,8 @@ namespace ScienceWordOverlay
             {
                 var s3 = Surface.Solid3D;
                 row1.Children.Add(MakeCtxBtn("✥ Di chuyển", () => Surface.SetTool("select"), "#1D4ED8"));
-                row1.Children.Add(MakeCtxBtn("🔄 Xoay 3D", () => Surface.SetTool("orbit_3d"), "#7C3AED"));
+                row1.Children.Add(MakeCtxBtn("🔄 Xoay tay", () => Surface.SetTool("orbit_3d"), "#7C3AED"));
+                row1.Children.Add(MakeCtxBtn(Surface.IsSpinningVertical3D ? "⏸ Dừng quay" : "⟳ Quay trục đứng", () => Surface.ToggleVerticalSpin3D(), Surface.IsSpinningVertical3D ? "#DC2626" : "#B45309", tooltip: "Tự động quay khối 3D quanh trục thẳng đứng"));
                 row1.Children.Add(MakeCtxBtn(s3.IsSolidShaded ? "🧊 Khối đặc ✓" : "📐 Khung dây", () => Surface.ToggleSolid3DShaded(), s3.IsSolidShaded ? "#0F766E" : "#334155"));
                 row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSolid3DColor(), s3.SolidColorHex, "#0F172A"));
                 row1.Children.Add(MakeCtxBtn("＋", () => Surface.ScaleSolid3D(1.12), tooltip: "Phóng to khối 3D"));
@@ -121,9 +122,21 @@ namespace ScienceWordOverlay
                 row1.Children.Add(MakeCtxBtn("＋ Cận/Miền", () => Surface.SetTool("add_bound"), "#0EA5E9"));
                 row1.Children.Add(MakeCtxBtn("🎨 Màu S", () => Surface.CycleArea2DColor(), Surface.Area2DColorHex));
                 row1.Children.Add(MakeCtxBtn("🌀 Quay 3D (V)", () => { Surface.RevMode = MathRenderMode.Solid3D; Surface.InvalidateVisual(); }, "#7C3AED"));
+                row1.Children.Add(MakeCtxBtn(Surface.IsSpinningVertical3D ? "⏸ Dừng trục đứng" : "⟳ Quay trục đứng", () => Surface.ToggleVerticalSpin3D(), Surface.IsSpinningVertical3D ? "#DC2626" : "#B45309", tooltip: "Quay khối tròn xoay 3D quanh trục thẳng đứng (kéo chuột phải để xoay tay)"));
+                row1.Children.Add(MakeCtxBtn("↺ 0°", () => Surface.ResetRevTurntable(), "#334155", tooltip: "Đưa về góc 0° khớp với hình gốc"));
                 row1.Children.Add(MakeCtxBtn("🎨 Màu V", () => Surface.CycleVolume3DColor(), Surface.Volume3DColorHex));
                 row1.Children.Add(MakeCtxBtn("－ Miền", () => Surface.RemoveRevolutionRegion(), "#475569"));
-                row1.Children.Add(MakeCtxBtn("🗑", () => { Surface.RevScene = null; Surface.NotifyMetrics(); Surface.InvalidateVisual(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                row1.Children.Add(MakeCtxBtn("🗑", () => { Surface.SetVerticalSpin3D(false); Surface.RevScene = null; Surface.NotifyMetrics(); Surface.InvalidateVisual(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                ContextMenuItems.Children.Add(row1);
+            }
+            else if (kind == "math")
+            {
+                row1.Children.Add(MakeCtxBtn("✏️ Sửa công thức", () => Surface.EditSelectedMathFormula(), "#D97706"));
+                row1.Children.Add(MakeCtxBtn("A－", () => Surface.ScaleSelectedMathFormula(-3)));
+                row1.Children.Add(MakeCtxBtn("A＋", () => Surface.ScaleSelectedMathFormula(3)));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSelectedMathColor(), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("📥 Chèn App", () => Surface.InsertIntoTargetApp(), "#059669"));
+                row1.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
                 ContextMenuItems.Children.Add(row1);
             }
             else

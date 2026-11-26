@@ -16,8 +16,8 @@ namespace ScienceWordOverlay
         private readonly OverlayWindow _overlay;
         private readonly DispatcherTimer _appPollTimer;
         private readonly DispatcherTimer _revAnimTimer;
-        private DispatcherTimer? _spin3DTimer;
-        private bool _isAnimatingRev = false, _isSpinning3D = false;
+        private TextMathWindow? _textMathWin;
+        private bool _isAnimatingRev = false;
         private readonly OfficeDoubleClickHook _dblClickHook = new();
         private readonly DispatcherTimer _dblClickDelayTimer;
         private string _pendingDblClickProc = "";
@@ -51,8 +51,20 @@ namespace ScienceWordOverlay
                     "section_3d" => "Thiết diện 3D",
                     "plane_3pts_3d" => "Mp qua 3 điểm",
                     "plane_para_3d" => "Mp 1đ // mặt",
+                    "pen" => "Bút viết mịn",
+                    "highlighter" => "Dạ quang",
+                    "eraser" => "Tẩy nét",
                     _ => TxtActiveTool.Text
                 };
+            };
+            _overlay.Surface.MathFormulaEditRequested += mf =>
+            {
+                EnsureTextMathWindow().OpenForEdit(mf);
+            };
+            _overlay.Surface.VerticalSpinStateChanged += spinning =>
+            {
+                if (BtnAutoSpin3D != null) BtnAutoSpin3D.Content = spinning ? "⏸ Dừng" : "▶ Quay";
+                if (BtnRevVertSpin != null) BtnRevVertSpin.Content = spinning ? "⏸ Dừng" : "⟳ Trục đứng";
             };
 
             _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
@@ -128,7 +140,29 @@ namespace ScienceWordOverlay
 
         private void Grip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
         private void ActivateTool(string tag, string displayName) { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SetTool(tag); TxtActiveTool.Text = displayName; }
+        private TextMathWindow EnsureTextMathWindow()
+        {
+            if (_textMathWin == null)
+            {
+                _textMathWin = new TextMathWindow(_overlay.Surface);
+                _textMathWin.Owner = _overlay;
+            }
+            return _textMathWin;
+        }
+
         private void QuickSelect_Click(object sender, RoutedEventArgs e) => ActivateTool("select", "Chọn / Di chuyển");
+
+        private void BtnTextMath_Click(object sender, RoutedEventArgs e)
+        {
+            if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false;
+            var w = EnsureTextMathWindow();
+            if (w.IsVisible) w.Hide(); else w.OpenForCreate(penMode: false);
+        }
+
+        private void BtnQuickPen_Click(object sender, RoutedEventArgs e)
+        {
+            ActivateTool(_overlay.Surface.PenTipStyle == "highlighter" ? "highlighter" : (_overlay.Surface.PenTipStyle == "eraser" ? "eraser" : "pen"), "Bút viết mịn");
+        }
 
         private void BtnMenu2D_Click(object sender, RoutedEventArgs e)
         {
@@ -230,7 +264,17 @@ namespace ScienceWordOverlay
             }
         }
 
-        private void CbPenType_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbPenType.SelectedItem is ComboBoxItem item && item.Tag is string ps) { _overlay.Surface.PenTipStyle = ps; _overlay.Surface.InvalidateVisual(); } }
+        private void CbPenType_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_overlay != null && CbPenType.SelectedItem is ComboBoxItem item && item.Tag is string ps)
+            {
+                _overlay.Surface.PenTipStyle = ps;
+                if (ps == "eraser") ActivateTool("eraser", "Tẩy nét");
+                else if (ps == "highlighter") ActivateTool("highlighter", "Dạ quang");
+                else if (_overlay.Surface.Tool is "pen" or "highlighter" or "eraser") ActivateTool("pen", "Bút viết mịn");
+                _overlay.Surface.InvalidateVisual();
+            }
+        }
         private void CbWidth_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbWidth.SelectedItem is ComboBoxItem item && item.Tag is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double w)) _overlay.Surface.StrokeWidth = w; }
         private void CbPattern_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbPattern.SelectedItem is ComboBoxItem item && item.Tag is string pat) { _overlay.Surface.FillPattern = pat; _overlay.Surface.InvalidateVisual(); } }
         private void SlOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay == null) return; double v = e.NewValue / 100.0; _overlay.Surface.FillOpacity = v; if (_overlay.Surface.Solid3D != null) _overlay.Surface.Solid3D.SolidOpacity = v; _overlay.Surface.InvalidateVisual(); }
@@ -238,14 +282,23 @@ namespace ScienceWordOverlay
 
         private void BtnAutoSpin3D_Click(object sender, RoutedEventArgs e)
         {
-            if (_overlay.Surface.Solid3D == null) { _overlay.Surface.ShowToast("Hãy chọn 1 khối từ menu [Vẽ 3D ▾] trước!"); return; }
-            if (_spin3DTimer == null) { _spin3DTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) }; _spin3DTimer.Tick += (_, _) => { if (_overlay.Surface.Solid3D == null) return; _overlay.Surface.Solid3D.YawDeg = (_overlay.Surface.Solid3D.YawDeg + 1.4) % 360.0; _overlay.Surface.InvalidateVisual(); }; }
-            _isSpinning3D = !_isSpinning3D;
-            if (_isSpinning3D) { _spin3DTimer.Start(); BtnAutoSpin3D.Content = "⏸ Dừng"; } else { _spin3DTimer.Stop(); BtnAutoSpin3D.Content = "▶ Quay"; }
+            _overlay.Surface.ToggleVerticalSpin3D();
         }
 
+        private void BtnRevVertSpin_Click(object sender, RoutedEventArgs e)
+        {
+            if (_overlay.Surface.RevScene == null) _overlay.Surface.SyncFromOffice();
+            if (_overlay.Surface.RevScene == null) return;
+            _overlay.Surface.RevMode = MathRenderMode.Solid3D;
+            BtnRev3D.Background = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            BtnRevArea.Background = new SolidColorBrush(Color.FromArgb(220, 30, 41, 59));
+            _overlay.Surface.ToggleVerticalSpin3D();
+        }
+
+        private void BtnRevResetSpin_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ResetRevTurntable();
+
         private void SlSplit3D_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay == null || _overlay.Surface.Solid3D == null) return; _overlay.Surface.Solid3D.SplitAmount = e.NewValue / 100.0; if (TxtSplit3D != null) TxtSplit3D.Text = $"Tách:{e.NewValue:0}%"; _overlay.Surface.InvalidateVisual(); }
-        private void BtnClearSolid3D_Click(object sender, RoutedEventArgs e) { _isSpinning3D = false; _spin3DTimer?.Stop(); BtnAutoSpin3D.Content = "▶ Quay"; _overlay.Surface.DeleteSolid3D(); SlSplit3D.Value = 0; }
+        private void BtnClearSolid3D_Click(object sender, RoutedEventArgs e) { _overlay.Surface.DeleteSolid3D(); SlSplit3D.Value = 0; }
         private void BtnUndo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Undo();
         private void BtnRedo_Click(object sender, RoutedEventArgs e) => _overlay.Surface.Redo();
         private void BtnClear_Click(object sender, RoutedEventArgs e) { BtnClearSolid3D_Click(sender, e); _overlay.Surface.ClearAll(); Row3Panel.Visibility = Visibility.Collapsed; }
@@ -282,6 +335,6 @@ namespace ScienceWordOverlay
         private void BtnRevSwap_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.SwapAxisAndCurve()) { _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast("Đã đổi trục quay & đường cong sinh!"); } }
         private void BtnRevClear_Click(object sender, RoutedEventArgs e) { _overlay.Surface.RevScene = null; Row3Panel.Visibility = Visibility.Collapsed; _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _spin3DTimer?.Stop(); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); Application.Current.Shutdown(); }
+        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _overlay.Surface.SetVerticalSpin3D(false); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); _textMathWin?.Close(); Application.Current.Shutdown(); }
     }
 }

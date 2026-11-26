@@ -14,6 +14,7 @@ namespace ScienceWordOverlay.Models
     public class GeoMarker { public string Id { get; set; } = ""; public string Type { get; set; } = "right_angle"; public string P1Id { get; set; } = ""; public string VertexId { get; set; } = ""; public string P2Id { get; set; } = ""; public string ColorHex { get; set; } = "#0F172A"; }
     public class FreeStroke { public string Id { get; set; } = ""; public List<double[]> Points { get; set; } = new(); public string ColorHex { get; set; } = "#0F172A"; public double Width { get; set; } = 2.5; public double Opacity { get; set; } = 1.0; public bool IsHighlighter { get; set; } = false; public string PenStyle { get; set; } = "solid"; public List<double> PointWidths { get; set; } = new(); }
     public class GeoText { public string Id { get; set; } = ""; public double X { get; set; } public double Y { get; set; } public string Text { get; set; } = ""; public string ColorHex { get; set; } = "#0F172A"; public double FontSize { get; set; } = 22; }
+    public class GeoMathFormula { public string Id { get; set; } = ""; public double X { get; set; } public double Y { get; set; } public string Latex { get; set; } = ""; public string ColorHex { get; set; } = "#0F172A"; public double FontSize { get; set; } = 24; public bool ForceMath { get; set; } = true; public bool LayerBelow { get; set; } = false; }
     public class MagicFillLayer { public string Id { get; set; } = ""; public BitmapSource Bitmap { get; set; } = null!; public Rect BoundsDip { get; set; } }
 
     public class SceneState
@@ -24,6 +25,7 @@ namespace ScienceWordOverlay.Models
         public List<GeoMarker> Markers { get; set; } = new();
         public List<FreeStroke> Strokes { get; set; } = new();
         public List<GeoText> Texts { get; set; } = new();
+        public List<GeoMathFormula> MathFormulas { get; set; } = new();
         public int NextId { get; set; } = 1;
     }
 
@@ -233,16 +235,81 @@ namespace ScienceWordOverlay.Models
                 Regions[ActiveRegionIndex].ColorHex = hex;
         }
 
+        public double TurntableYawDeg { get; set; } = 0.0;
+        public double TurntablePitchDeg { get; set; } = 0.0;
+        public bool HasTurntableRotation => Math.Abs(TurntableYawDeg % 360.0) > 0.05 || Math.Abs(TurntablePitchDeg) > 0.05;
+
+        public Point GetPivotScreenCenter()
+        {
+            double tMid = 0.5 * (LimitA + LimitB);
+            if (Math.Abs(LimitB - LimitA) < 1.0) tMid = 0.5 * (TMin + TMax);
+            return ToScreen2D(tMid, 0.0);
+        }
+
         public Point ToScreen2D(double t, double r) => new(AxisOrigin.X + t * AxisU.X + r * AxisV.X, AxisOrigin.Y + t * AxisU.Y + r * AxisV.Y);
+
+        private (double sx, double sy, double sz) EvalRotated3D(double t, double r, double thetaRad, double xCompression)
+        {
+            double cosT = Math.Cos(thetaRad), sinT = Math.Sin(thetaRad);
+            if (!HasTurntableRotation)
+            {
+                double obliqueU = xCompression * r * sinT * 0.90;
+                double obliqueV = r * (cosT - xCompression * sinT * 0.18);
+                double px = AxisOrigin.X + (t + obliqueU) * AxisU.X + obliqueV * AxisV.X;
+                double py = AxisOrigin.Y + (t + obliqueU) * AxisU.Y + obliqueV * AxisV.Y;
+                double depth = r * sinT - (r * cosT) * (0.20 * AxisV.Y) + (t - TMin) * 0.0006;
+                return (px, py, depth);
+            }
+
+            // Quay khoi tron xoay quanh TRUC THANG DUNG di qua tam khoi (giong clip 3D)
+            Point pivot = GetPivotScreenCenter();
+            double tMid = 0.5 * (LimitA + LimitB);
+            if (Math.Abs(LimitB - LimitA) < 1.0) tMid = 0.5 * (TMin + TMax);
+            double dt = t - tMid;
+            double x0 = dt * AxisU.X + (r * cosT) * AxisV.X;
+            double y0 = dt * AxisU.Y + (r * cosT) * AxisV.Y; // Y man hinh huong xuong
+            double z0 = r * sinT;
+
+            // 1. Quay quanh truc thang dung (truc Y man hinh) mot goc TurntableYawDeg
+            double ry = TurntableYawDeg * Math.PI / 180.0;
+            double cosY = Math.Cos(ry), sinY = Math.Sin(ry);
+            double x1 = x0 * cosY + z0 * sinY;
+            double y1 = y0;
+            double z1 = -x0 * sinY + z0 * cosY;
+
+            // 2. Nghieng nhe theo goc Pitch (mac dinh +12 deg khi dang quay de thay ro chieu sau 3D)
+            double rx = (TurntablePitchDeg + 10.0) * Math.PI / 180.0;
+            double cosX = Math.Cos(rx), sinX = Math.Sin(rx);
+            double y2 = y1 * cosX - z1 * sinX;
+            double z2 = y1 * sinX + z1 * cosX;
+
+            double persp = 1.0 / Math.Max(0.45, 1.0 - z2 * 0.00055);
+            return (pivot.X + x1 * persp, pivot.Y + y2 * persp, z2);
+        }
 
         public Point Project3D(double t, double r, double thetaRad, double xCompression)
         {
-            double cosT = Math.Cos(thetaRad), sinT = Math.Sin(thetaRad);
-            double obliqueU = xCompression * r * sinT * 0.90, obliqueV = r * (cosT - xCompression * sinT * 0.18);
-            return new Point(AxisOrigin.X + (t + obliqueU) * AxisU.X + obliqueV * AxisV.X, AxisOrigin.Y + (t + obliqueU) * AxisU.Y + obliqueV * AxisV.Y);
+            var p = EvalRotated3D(t, r, thetaRad, xCompression);
+            return new Point(p.sx, p.sy);
         }
 
-        public double ComputeDepth(double t, double r, double thetaRad) => r * Math.Sin(thetaRad) - (r * Math.Cos(thetaRad)) * (0.20 * AxisV.Y) + (t - TMin) * 0.0006;
+        public double ComputeDepth(double t, double r, double thetaRad, double xCompression = 0.28)
+        {
+            return EvalRotated3D(t, r, thetaRad, xCompression).sz;
+        }
+
+        public (double nx, double ny, double nz) RotateNormal3D(double nx, double ny, double nz)
+        {
+            if (!HasTurntableRotation) return (nx, ny, nz);
+            double ry = TurntableYawDeg * Math.PI / 180.0;
+            double cosY = Math.Cos(ry), sinY = Math.Sin(ry);
+            double x1 = nx * cosY + nz * sinY;
+            double y1 = ny;
+            double z1 = -nx * sinY + nz * cosY;
+            double rx = (TurntablePitchDeg + 10.0) * Math.PI / 180.0;
+            double cosX = Math.Cos(rx), sinX = Math.Sin(rx);
+            return (x1, y1 * cosX - z1 * sinX, y1 * sinX + z1 * cosX);
+        }
 
         public static double SampleR(List<Point> trPts, double t)
         {
