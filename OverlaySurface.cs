@@ -878,21 +878,6 @@ namespace ScienceWordOverlay
             base.OnMouseUp(e);
             if (_isDraggingGroup)
             {
-                MoveSelectedGroupBy(pos.X - _groupLastPos.X, pos.Y - _groupLastPos.Y);
-                _groupLastPos = pos;
-                InvalidateVisual();
-                return;
-            }
-
-            if (_marqueeRect.HasValue)
-            {
-                _marqueeRect = new Rect(_marqueeStart, pos);
-                InvalidateVisual();
-                return;
-            }
-
-            if (_isDraggingGroup)
-            {
                 _isDraggingGroup = false;
             }
             if (_marqueeRect.HasValue)
