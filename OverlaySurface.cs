@@ -192,7 +192,7 @@ namespace ScienceWordOverlay
         {
             _areaColorIdx = (_areaColorIdx + 1) % AreaPalette.Length;
             Area2DColorHex = AreaPalette[_areaColorIdx];
-            if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Area2D) RevScene.SetActiveRegionColor(Area2DColorHex);
+            if (RevScene != null && RevScene.IsValid) RevScene.SetActiveRegionColor(Area2DColorHex);
             InvalidateVisual(); RefreshRevMenu(); ShowToast($"Màu Diện tích (S): {Area2DColorHex}");
             return Area2DColorHex;
         }
@@ -425,9 +425,10 @@ namespace ScienceWordOverlay
                         var entry = SceneHistoryStore.GetById(sceneId);
                         if (entry != null)
                         {
+                            UpdateOfficeOriginSync();
                             var dpi = VisualTreeHelper.GetDpi(this);
-                            double clickDipX = clickPxX / dpi.DpiScaleX;
-                            double clickDipY = clickPxY / dpi.DpiScaleY;
+                            double clickDipX = (clickPxX - OfficeComBridge.SurfaceOriginScreenPx.X) / dpi.DpiScaleX;
+                            double clickDipY = (clickPxY - OfficeComBridge.SurfaceOriginScreenPx.Y) / dpi.DpiScaleY;
                             double imgDipW = img.PixelWidth / dpi.DpiScaleX;
                             double imgDipH = img.PixelHeight / dpi.DpiScaleY;
                             double sx = entry.BoxW > 4 ? imgDipW / entry.BoxW : 1.0;
@@ -601,13 +602,19 @@ namespace ScienceWordOverlay
         // ================= SNIPPING TOOL ACTIONS (CHỤP VÙNG / TÔ VÙNG) =================
         public void CaptureSnipToClipboard()
         {
+            UpdateOfficeOriginSync();
             var dpi = VisualTreeHelper.GetDpi(this);
+            double oxDip = OfficeComBridge.SurfaceOriginScreenPx.X / dpi.DpiScaleX;
+            double oyDip = OfficeComBridge.SurfaceOriginScreenPx.Y / dpi.DpiScaleY;
             BitmapSource? bmp = null;
 
             if (ActiveSnipLasso.Count >= 3)
-                bmp = ScreenMagicWand.CaptureLassoSnip(ActiveSnipLasso, dpi.DpiScaleX, dpi.DpiScaleY);
+                bmp = ScreenMagicWand.CaptureLassoSnip(ActiveSnipLasso.Select(p => new Point(p.X + oxDip, p.Y + oyDip)).ToList(), dpi.DpiScaleX, dpi.DpiScaleY);
             else if (ActiveSnipRect.HasValue && ActiveSnipRect.Value.Width > 3 && ActiveSnipRect.Value.Height > 3)
-                bmp = ScreenMagicWand.CaptureRectSnip(ActiveSnipRect.Value, dpi.DpiScaleX, dpi.DpiScaleY);
+            {
+                var r = ActiveSnipRect.Value;
+                bmp = ScreenMagicWand.CaptureRectSnip(new Rect(r.X + oxDip, r.Y + oyDip, r.Width, r.Height), dpi.DpiScaleX, dpi.DpiScaleY);
+            }
 
             if (bmp == null)
             {
@@ -1105,11 +1112,16 @@ namespace ScienceWordOverlay
             // 2. Đũa thần Flood-Fill
             if (Tool == "magic_wand")
             {
+                UpdateOfficeOriginSync();
                 var dpi = VisualTreeHelper.GetDpi(this);
-                var res = ScreenMagicWand.CaptureAndFloodFill(pos, dpi.DpiScaleX, dpi.DpiScaleY, ParseColor(FillColorHex, 1.0), FillOpacity, FillPattern, 32);
+                double oxDip = OfficeComBridge.SurfaceOriginScreenPx.X / dpi.DpiScaleX;
+                double oyDip = OfficeComBridge.SurfaceOriginScreenPx.Y / dpi.DpiScaleY;
+                var screenPosDip = new Point(pos.X + oxDip, pos.Y + oyDip);
+                var res = ScreenMagicWand.CaptureAndFloodFill(screenPosDip, dpi.DpiScaleX, dpi.DpiScaleY, ParseColor(FillColorHex, 1.0), FillOpacity, FillPattern, 32);
                 if (res != null)
                 {
-                    MagicFills.Add(new MagicFillLayer { Id = GenId("mf"), Bitmap = res.Bitmap, BoundsDip = res.BoundsDip });
+                    var localBounds = new Rect(res.BoundsDip.X - oxDip, res.BoundsDip.Y - oyDip, res.BoundsDip.Width, res.BoundsDip.Height);
+                    MagicFills.Add(new MagicFillLayer { Id = GenId("mf"), Bitmap = res.Bitmap, BoundsDip = localBounds });
                     InvalidateVisual();
                     ShowToast("Đũa thần đã dò viền và tô màu vùng kín thành công!");
                 }
@@ -1349,6 +1361,7 @@ namespace ScienceWordOverlay
         protected override void OnMouseUp(MouseButtonEventArgs e)
         {
             base.OnMouseUp(e);
+            bool wasDraggingGroup = _isDraggingGroup;
             if (_isDraggingGroup)
             {
                 _isDraggingGroup = false;
@@ -1377,7 +1390,7 @@ namespace ScienceWordOverlay
                     ShowToast("Đã khoanh vùng! Bấm [Chụp vùng] (Enter) để Copy ảnh, hoặc [Tô vùng] để tô màu!", 4000);
                 InvalidateVisual();
             }
-            if (_isDraggingGroup) Refresh2DMenu();
+            if (wasDraggingGroup) Refresh2DMenu();
             _dragRevRegionIdx = -1;
             _isOrbiting3D = false; _isMoving3D = false;
             _draggingPointId = null; _draggingTextId = null; _activeStroke = null;
@@ -1453,8 +1466,14 @@ namespace ScienceWordOverlay
 
         private static Pen MakePen(string hex, double width, string dash, bool highlight = false)
         {
-            var pen = new Pen(new SolidColorBrush(highlight ? ParseColor("#2563EB") : ParseColor(hex)), width + (highlight ? 1.4 : 0.0)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
-            if (dash == "dashed") pen.DashStyle = new DashStyle(new double[] { 5.5, 3.8 }, 0);
+            var pen = new Pen(new SolidColorBrush(highlight ? ParseColor("#2563EB") : ParseColor(hex)), width + (highlight ? 1.4 : 0.0))
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round,
+                DashCap = PenLineCap.Flat,
+                LineJoin = PenLineJoin.Round
+            };
+            if (dash == "dashed") pen.DashStyle = new DashStyle(new double[] { 5.0, 4.2 }, 0);
             else if (dash == "dotted") pen.DashStyle = DashStyles.Dot;
             return pen;
         }
@@ -2099,7 +2118,7 @@ namespace ScienceWordOverlay
                     foreach (var ring in rings) { var gRing = new StreamGeometry(); using (var ctx = gRing.Open()) { ctx.BeginFigure(ring[0], false, false); for (int j = 1; j < ring.Length; j++) ctx.LineTo(ring[j], true, false); } gRing.Freeze(); dc.DrawGeometry(null, rimPen, gRing); }
                 }
                 if (RevShowAreaIn3D || RevSweepDeg < 1.0)
-                    foreach (var rg in s.Regions) if (rg.Enabled) DrawPlanarSlice(rg.StartT, rg.EndT, Area2DColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false);
+                    foreach (var rg in s.Regions) if (rg.Enabled) DrawPlanarSlice(rg.StartT, rg.EndT, rg.ColorHex, Math.Clamp(FillOpacity + 0.05, 0.25, 0.65), false);
             }
 
             if (!cleanExport && Tool == "add_bound")
@@ -2431,22 +2450,34 @@ namespace ScienceWordOverlay
             var xs = new List<double>(); var ys = new List<double>();
             if (RevScene != null && RevScene.IsValid)
             {
-                double a = Math.Min(RevScene.LimitA, RevScene.LimitB), b = Math.Max(RevScene.LimitA, RevScene.LimitB);
-                for (int i = 0; i <= 36; i++)
+                RevScene.EnsureRegionsInitialized();
+                foreach (var rg in RevScene.Regions)
                 {
-                    double t = a + (b - a) * i / 36.0;
-                    double r = RevolutionScene.SampleR(RevScene.Curve1TR, t);
-                    if (RevMode == MathRenderMode.Area2D)
+                    if (!rg.Enabled || rg.EndT - rg.StartT < 1.0) continue;
+                    double a = rg.StartT, b = rg.EndT;
+                    for (int i = 0; i <= 36; i++)
                     {
-                        var p1 = RevScene.ToScreen2D(t, r); var p2 = RevScene.ToScreen2D(t, 0);
-                        xs.Add(p1.X); xs.Add(p2.X); ys.Add(p1.Y); ys.Add(p2.Y);
-                    }
-                    else
-                    {
-                        for (int j = 0; j <= 12; j++)
+                        double t = a + (b - a) * i / 36.0;
+                        double r1 = RevolutionScene.SampleR(RevScene.Curve1TR, t);
+                        double r2 = RevScene.HasTwoCurves ? RevolutionScene.SampleR(RevScene.Curve2TR, t) : 0.0;
+                        if (RevMode == MathRenderMode.Area2D)
                         {
-                            var p = RevScene.Project3D(t, r, (RevSweepDeg * Math.PI / 180.0) * j / 12.0, RevXCompression);
-                            xs.Add(p.X); ys.Add(p.Y);
+                            var p1 = RevScene.ToScreen2D(t, r1); var p2 = RevScene.ToScreen2D(t, r2);
+                            xs.Add(p1.X); xs.Add(p2.X); ys.Add(p1.Y); ys.Add(p2.Y);
+                        }
+                        else
+                        {
+                            for (int j = 0; j <= 12; j++)
+                            {
+                                double ang = (RevSweepDeg * Math.PI / 180.0) * j / 12.0;
+                                var p = RevScene.Project3D(t, r1, ang, RevXCompression);
+                                xs.Add(p.X); ys.Add(p.Y);
+                                if (RevScene.HasTwoCurves)
+                                {
+                                    var p2 = RevScene.ToScreen2D(t, r2);
+                                    xs.Add(p2.X); ys.Add(p2.Y);
+                                }
+                            }
                         }
                     }
                 }

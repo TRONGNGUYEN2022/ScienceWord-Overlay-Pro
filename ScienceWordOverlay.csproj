@@ -8,8 +8,6 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>ScienceWord_Overlay_Pro</AssemblyName>
     <RootNamespace>ScienceWordOverlay</RootNamespace>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
 </Project>

@@ -341,8 +341,10 @@ namespace ScienceWordOverlay.Utils
                             {
                                 double caretXPt = GetComIndexedDouble(selRangeObj, "Information", 5);
                                 double caretYPt = GetComIndexedDouble(selRangeObj, "Information", 6);
-                                leftPt = caretXPt + (screenBoxDip.Left - caretPx.Left / dpiScaleX) / dipPerPt;
-                                topPt = caretYPt + (screenBoxDip.Top - caretPx.Top / dpiScaleY) / dipPerPt;
+                                double caretDipX = (caretPx.Left - SurfaceOriginScreenPx.X) / dpiScaleX;
+                                double caretDipY = (caretPx.Top - SurfaceOriginScreenPx.Y) / dpiScaleY;
+                                leftPt = caretXPt + (screenBoxDip.Left - caretDipX) / dipPerPt;
+                                topPt = caretYPt + (screenBoxDip.Top - caretDipY) / dipPerPt;
                                 anchorRange = selRangeObj;
                             }
                         }
@@ -446,9 +448,9 @@ namespace ScienceWordOverlay.Utils
                 {
                     try
                     {
-                        double x0 = Convert.ToDouble(win.PointsToScreenPixelsX(0f)) / dpiScaleX;
-                        double y0 = Convert.ToDouble(win.PointsToScreenPixelsY(0f)) / dpiScaleY;
-                        double x100 = Convert.ToDouble(win.PointsToScreenPixelsX(100f)) / dpiScaleX;
+                        double x0 = (Convert.ToDouble(win.PointsToScreenPixelsX(0f)) - SurfaceOriginScreenPx.X) / dpiScaleX;
+                        double y0 = (Convert.ToDouble(win.PointsToScreenPixelsY(0f)) - SurfaceOriginScreenPx.Y) / dpiScaleY;
+                        double x100 = (Convert.ToDouble(win.PointsToScreenPixelsX(100f)) - SurfaceOriginScreenPx.X) / dpiScaleX;
                         if (x100 - x0 > 5.0) dipPerPt = (x100 - x0) / 100.0;
                         leftPt = (screenBoxDip.Left - x0) / dipPerPt;
                         topPt = (screenBoxDip.Top - y0) / dipPerPt;
@@ -543,9 +545,9 @@ namespace ScienceWordOverlay.Utils
                 {
                     try
                     {
-                        double x0 = Convert.ToDouble(win.PointsToScreenPixelsX(0.0)) / dpiScaleX;
-                        double y0 = Convert.ToDouble(win.PointsToScreenPixelsY(0.0)) / dpiScaleY;
-                        double x100 = Convert.ToDouble(win.PointsToScreenPixelsX(100.0)) / dpiScaleX;
+                        double x0 = (Convert.ToDouble(win.PointsToScreenPixelsX(0.0)) - SurfaceOriginScreenPx.X) / dpiScaleX;
+                        double y0 = (Convert.ToDouble(win.PointsToScreenPixelsY(0.0)) - SurfaceOriginScreenPx.Y) / dpiScaleY;
+                        double x100 = (Convert.ToDouble(win.PointsToScreenPixelsX(100.0)) - SurfaceOriginScreenPx.X) / dpiScaleX;
                         if (x100 - x0 > 5.0) dipPerPt = (x100 - x0) / 100.0;
                         leftPt = (screenBoxDip.Left - x0) / dipPerPt;
                         topPt = (screenBoxDip.Top - y0) / dipPerPt;
