@@ -82,6 +82,14 @@ namespace ScienceWordOverlay
             _isReady = true;
             BuildVkButtons("basic");
             RefreshPreview();
+            TxtFormulaInput.PreviewKeyDown += (_, ke) =>
+            {
+                if (ke.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+                {
+                    ke.Handled = true;
+                    BtnInsertFormulaToOverlay_Click(TxtFormulaInput, new RoutedEventArgs());
+                }
+            };
             Closing += (_, e) =>
             {
                 if (!AllowRealClose)

@@ -74,6 +74,15 @@ namespace ScienceWordOverlay
                 row1.Children.Add(MakeCtxBtn(Surface.IsSpinningHorizontal3D ? "⏸ Dừng ngang" : "⇵ Trục ngang", () => Surface.ToggleHorizontalSpin3D(), Surface.IsSpinningHorizontal3D ? "#DC2626" : "#0369A1", tooltip: "Tự động quay khối 3D quanh trục nằm ngang"));
                 row1.Children.Add(MakeCtxBtn(s3.IsSolidShaded ? "🧊 Khối đặc ✓" : "📐 Khung dây", () => Surface.ToggleSolid3DShaded(), s3.IsSolidShaded ? "#0F766E" : "#334155"));
                 row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSolid3DColor(), s3.SolidColorHex, "#0F172A"));
+                if (s3.Kind is "poly" or "cone" or "cylinder")
+                {
+                    row1.Children.Add(MakeCtxBtn(s3.IsNetUnfolded ? "📦 Gấp lại" : "📦 Net (Trải phẳng)", () => Surface.ToggleNetUnfold3D(), s3.IsNetUnfolded ? "#D97706" : "#0F766E", tooltip: "Khai triển trải phẳng Net các mặt khối 3D (giống GeoGebra)"));
+                    if (s3.IsNetUnfolded && s3.Kind == "poly" && s3.Faces.Count >= 6)
+                        row1.Children.Add(MakeCtxBtn("🔄 Bản lề nắp", () => Surface.CycleNetTopHinge3D(), "#4F46E5", tooltip: "Đổi cạnh bản lề để lật nắp trên"));
+                }
+                row1.Children.Add(MakeCtxBtn(Surface.ShowCoordSystem3D ? "🌐 Oxyz ✓" : "🌐 Oxyz", () => Surface.ToggleCoordSystem3D(), Surface.ShowCoordSystem3D ? "#1D4ED8" : "#334155", tooltip: "Bật / tắt Hệ tọa độ không gian Oxyz"));
+                if (Surface.Solids3DList.Count >= 2)
+                    row1.Children.Add(MakeCtxBtn("⋈ Giao 2 khối", () => Surface.IntersectActiveSolids3D(), "#9333EA", tooltip: "Tính giao giữa 2 khối 3D"));
                 row1.Children.Add(MakeCtxBtn("＋", () => Surface.ScaleSolid3D(1.12), tooltip: "Phóng to khối 3D"));
                 row1.Children.Add(MakeCtxBtn("－", () => Surface.ScaleSolid3D(0.89), tooltip: "Thu nhỏ khối 3D"));
                 if (s3.Kind == "poly")
@@ -105,6 +114,7 @@ namespace ScienceWordOverlay
                     row2.Children.Add(MakeCtxBtn("⟳", () => Surface.TiltCutPlane3D(12.0), "#4C1D95", tooltip: "Xoay góc nghiêng mặt phẳng (P) phải"));
                     row2.Children.Add(MakeCtxBtn("⊥ Dọc", () => Surface.SetCutPlaneVertical90(), "#0F766E", tooltip: "Cắt dọc 90° qua trục (HCN / Tam giác cân / Đường tròn lớn)"));
                     row2.Children.Add(MakeCtxBtn(s3.CutPlane.Visible ? "👁 Ẩn (P)" : "👁 Hiện (P)", () => Surface.ToggleCutPlaneVisible(), "#334155", tooltip: "Bật / tắt hiển thị tấm mặt phẳng (P)"));
+                    row2.Children.Add(MakeCtxBtn("↺ Ghép phần", () => Surface.ResetSolidPartOffsets(), "#047857", tooltip: "Ghép khít các phần đã kéo tách"));
                     row2.Children.Add(MakeCtxBtn("✕ Gỡ (P)", () => Surface.RemoveCutPlane3D(), "#991B1B", tooltip: "Xóa mặt phẳng cắt (P)"));
                     ContextMenuItems.Children.Add(row2);
                 }

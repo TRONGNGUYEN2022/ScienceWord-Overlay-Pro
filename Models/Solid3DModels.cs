@@ -72,6 +72,7 @@ namespace ScienceWordOverlay.Models
         public string PlaneColorHex { get; set; } = "#38BDF8";
         public string SectionColorHex { get; set; } = "#FACC15";
         public double HalfExtent { get; set; } = 1.65;
+        public List<Vec3> DefiningPoints3D { get; set; } = new();
 
         public Vec3 UnitNormal => Normal.Normalized();
 
@@ -118,14 +119,26 @@ namespace ScienceWordOverlay.Models
 
     public class Solid3DScene
     {
-        public string Kind { get; set; } = "poly"; // poly | cone | cylinder | sphere
+        public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+        public string Kind { get; set; } = "poly"; // poly | cone | cylinder | sphere | plane_only
         public string Name { get; set; } = "Chóp S.ABCD";
         public Point CenterScreen { get; set; } = new(440, 420);
         public double Scale { get; set; } = 135.0;
         public double YawDeg { get; set; } = -28.0;
         public double PitchDeg { get; set; } = 22.0;
+
+        // Tach khoi theo mat phang (P): ho tro ca thanh SplitAmount lan keo rieng tung nua (Above / Below)
         public double SplitAmount { get; set; } = 0.0;
+        public Vec3 PartOffsetAbove { get; set; } = new(0, 0, 0);
+        public Vec3 PartOffsetBelow { get; set; } = new(0, 0, 0);
+
         public bool AutoHiddenLines { get; set; } = true;
+        public bool HasActiveSplit => CutPlane != null && (SplitAmount > 0.01 || PartOffsetAbove.Length > 0.01 || PartOffsetBelow.Length > 0.01);
+
+        // Tinh nang Net (Khai trien trai phang khoi 3D giong GeoGebra Net)
+        public double UnfoldProgress { get; set; } = 0.0; // 0.0 (dong) -> 1.0 (trai phang hoan toan)
+        public int TopCapHingeIdx { get; set; } = 2;       // Canh ban le de lat nap tren (0..n-1)
+        public bool IsNetUnfolded => UnfoldProgress > 0.005;
 
         public bool IsSolidShaded { get; set; } = true;
         public string SolidColorHex { get; set; } = "#38BDF8";
@@ -142,6 +155,25 @@ namespace ScienceWordOverlay.Models
         public int NextIdx { get; set; } = 1;
 
         public Vertex3D? GetV(string id) => Vertices.FirstOrDefault(v => v.Id == id);
+
+        // Chuyen 1 diem man hinh (DIP) ve toa do local 3D (x, y, z) tai mat phang z = 0 quanh CenterScreen
+        public Vec3 ScreenToLocalApprox(Point screenPt, double zLocal = 0.0)
+        {
+            double persp = Math.Max(0.35, 1.0 - zLocal * 0.085);
+            double sc = Math.Max(20.0, Scale * persp);
+            double sx = (screenPt.X - CenterScreen.X) / sc;
+            double sy = -(screenPt.Y - CenterScreen.Y) / sc;
+
+            double ry = YawDeg * Math.PI / 180.0;
+            double rx = PitchDeg * Math.PI / 180.0;
+            // Nghich dao Pitch (rx)
+            double cy = sy * Math.Cos(-rx) - zLocal * Math.Sin(-rx);
+            double cz = sy * Math.Sin(-rx) + zLocal * Math.Cos(-rx);
+            // Nghich dao Yaw (ry)
+            double lx = sx * Math.Cos(-ry) + cz * Math.Sin(-ry);
+            double lz = -sx * Math.Sin(-ry) + cz * Math.Cos(-ry);
+            return new Vec3(lx, cy, lz);
+        }
 
         public Vec3 RotatePoint(Vec3 p)
         {
@@ -170,7 +202,11 @@ namespace ScienceWordOverlay.Models
 
         public Vec3 ComputeCentroid()
         {
-            if (Vertices.Count == 0) return new Vec3(0, 0, 0);
+            if (Vertices.Count == 0)
+            {
+                if (CutPlane != null) return CutPlane.Origin;
+                return new Vec3(0, 0, 0);
+            }
             double sx = 0, sy = 0, sz = 0;
             foreach (var v in Vertices) { sx += v.X; sy += v.Y; sz += v.Z; }
             return new Vec3(sx / Vertices.Count, sy / Vertices.Count, sz / Vertices.Count);
@@ -228,11 +264,54 @@ namespace ScienceWordOverlay.Models
             return normal.Length > 0.5;
         }
 
+        // Xac dinh 1 diem thuoc nua tren (+1) hay nua duoi (-1) cua mat phang cat (P)
+        public int GetPartSideSign(Vec3 p)
+        {
+            if (!TryGetCutPlane(out Vec3 o, out Vec3 n)) return 0;
+            double d = Vec3.Dot(p - o, n);
+            if (Math.Abs(d) <= 0.015) return 0;
+            return d > 0 ? 1 : -1;
+        }
+
+        public Vec3 GetPartOffset(int sideSign)
+        {
+            Vec3 off = sideSign > 0 ? PartOffsetAbove : (sideSign < 0 ? PartOffsetBelow : new Vec3(0, 0, 0));
+            if (sideSign > 0 && SplitAmount > 0.005 && TryGetCutPlane(out _, out Vec3 n))
+                off = off + n * (SplitAmount * 0.85);
+            return off;
+        }
+
+        public void NudgePartByScreenDelta(int sideSign, double dxDip, double dyDip)
+        {
+            if (sideSign == 0) return;
+            double persp = 1.0;
+            double sc = Math.Max(20.0, Scale * persp);
+            double sx = dxDip / sc;
+            double sy = -dyDip / sc;
+            double ry = YawDeg * Math.PI / 180.0;
+            double rx = PitchDeg * Math.PI / 180.0;
+            double cy = sy * Math.Cos(-rx);
+            double cz = sy * Math.Sin(-rx);
+            double lx = sx * Math.Cos(-ry) + cz * Math.Sin(-ry);
+            double lz = -sx * Math.Sin(-ry) + cz * Math.Cos(-ry);
+            Vec3 deltaLocal = new(lx, cy, lz);
+            if (sideSign > 0) PartOffsetAbove = PartOffsetAbove + deltaLocal;
+            else PartOffsetBelow = PartOffsetBelow + deltaLocal;
+        }
+
+        public void ResetPartOffsets()
+        {
+            SplitAmount = 0.0;
+            PartOffsetAbove = new Vec3(0, 0, 0);
+            PartOffsetBelow = new Vec3(0, 0, 0);
+        }
+
         public Vec3 GetEffectivePos(Vertex3D v, bool applySplit)
         {
             Vec3 p = v.Pos;
-            if (applySplit && SplitAmount > 0.01 && TryGetCutPlane(out Vec3 o, out Vec3 n))
-                if (Vec3.Dot(p - o, n) > 0.025) p = p + n * (SplitAmount * 0.85);
+            if (!applySplit) return p;
+            int side = GetPartSideSign(p);
+            if (side != 0) p = p + GetPartOffset(side);
             return p;
         }
 
@@ -245,7 +324,6 @@ namespace ScienceWordOverlay.Models
             var adjFaces = Faces.Where(f => IsVertexOnFace(v1, f) && IsVertexOnFace(v2, f)).ToList();
             if (adjFaces.Count == 0)
             {
-                // Duong xuyen ben trong da dien hoac canh phu -> kiem tra xem co nam tren mat nao khong
                 Vec3 mid = (v1.Pos + v2.Pos) * 0.5;
                 var planeFaces = Faces.Where(f => IsPointOnFace(v1.Pos, f) && IsPointOnFace(v2.Pos, f) && IsPointOnFace(mid, f)).ToList();
                 if (planeFaces.Count > 0)
@@ -253,13 +331,13 @@ namespace ScienceWordOverlay.Models
                     foreach (var f in planeFaces) if (IsFaceFrontFacing(f)) return false;
                     return true;
                 }
-                return true; // Doan ben trong khoi dac la net dut
+                return true;
             }
             foreach (var f in adjFaces) if (IsFaceFrontFacing(f)) return false;
             return true;
         }
 
-        // ===================== DỰNG MẶT PHẲNG CẮT (P) & TỰ TÍNH THIẾT DIỆN 3D =====================
+        // ===================== DỰNG MẶT PHẲNG BẤT KỲ & TỰ TÍNH THIẾT DIỆN 3D =====================
         public void InitInteractiveCutPlane(string sectionColorHex)
         {
             Vec3 origin = Kind == "poly" ? ComputeCentroid() : new Vec3(0, 0, 0);
@@ -279,6 +357,41 @@ namespace ScienceWordOverlay.Models
             };
         }
 
+        // Tao mat phang (P) bat ky tu 3 diem 3D (co the nam ngoai khoi 3D hoac do click cham tu do tren khong gian)
+        public (bool ok, string msg) CreatePlaneFromArbitrary3Points(Vec3 p1, Vec3 p2, Vec3 p3, string sectionColorHex)
+        {
+            Vec3 u = p2 - p1, v = p3 - p1;
+            Vec3 n = Vec3.Cross(u, v);
+            if (n.Length < 1e-4) return (false, "3 điểm thẳng hàng, không xác định được mặt phẳng (P)!");
+            n = n.Normalized();
+            if (n.Y < -0.001) n = n * -1.0;
+
+            Vec3 centroid = (p1 + p2 + p3) * (1.0 / 3.0);
+            double maxDist = Math.Max(1.35, Math.Max((p1 - centroid).Length, Math.Max((p2 - centroid).Length, (p3 - centroid).Length)) * 1.25);
+
+            var plane = new CutPlane3D
+            {
+                Label = "(P)",
+                Origin = centroid,
+                Normal = n,
+                Visible = true,
+                IsInteractive = true,
+                PlaneColorHex = "#38BDF8",
+                SectionColorHex = sectionColorHex,
+                HalfExtent = Math.Clamp(maxDist, 1.35, 2.8)
+            };
+            plane.DefiningPoints3D.AddRange(new[] { p1, p2, p3 });
+            CutPlane = plane;
+            ResetPartOffsets();
+
+            if (Kind == "plane_only")
+            {
+                Name = "Mặt phẳng (P) tự do";
+                return (true, "Đã dựng Mặt phẳng (P) qua 3 điểm tự do! Dùng ⬆/⬇, ⟲/⟳ hoặc kéo khối để dịch chuyển.");
+            }
+            return (true, "Đã dựng Mặt phẳng (P) qua 3 điểm & tự tính thiết diện cắt khối 3D! Có thể kéo rời từng phần hoặc kéo thanh [Tách].");
+        }
+
         public void NudgeCutPlane(double delta)
         {
             if (CutPlane == null) return;
@@ -286,7 +399,7 @@ namespace ScienceWordOverlay.Models
             CutPlane.Visible = true;
             Vec3 n = CutPlane.UnitNormal;
             Vec3 nextOrigin = CutPlane.Origin + n * delta;
-            double maxLim = Kind == "sphere" ? Radius * 1.15 : (Kind == "poly" ? 1.85 : Math.Max(Height, Radius) * 1.15);
+            double maxLim = Kind == "sphere" ? Radius * 1.15 : (Kind == "plane_only" ? 3.5 : (Kind == "poly" ? 1.85 : Math.Max(Height, Radius) * 1.15));
             Vec3 center = Kind == "poly" ? ComputeCentroid() : new Vec3(0, 0, 0);
             if ((nextOrigin - center).Length <= maxLim)
                 CutPlane.Origin = nextOrigin;
@@ -300,7 +413,6 @@ namespace ScienceWordOverlay.Models
             CutPlane.TiltDeg = (CutPlane.TiltDeg + deltaDeg) % 360.0;
             double rad = deltaDeg * Math.PI / 180.0;
             Vec3 n = CutPlane.UnitNormal;
-            // Xoay vector phap tuyen quanh truc X (nghieng mat phang huong ve phia nguoi nhin)
             double ny = n.Y * Math.Cos(rad) - n.Z * Math.Sin(rad);
             double nz = n.Y * Math.Sin(rad) + n.Z * Math.Cos(rad);
             CutPlane.Normal = new Vec3(n.X, ny, nz).Normalized();
@@ -354,6 +466,7 @@ namespace ScienceWordOverlay.Models
                 HalfExtent = 1.68
             };
             CutPlane = plane;
+            ResetPartOffsets();
             return BuildPolySectionFromPlane(plane, labelGen, $"({a.Label}{b.Label}{c.Label})");
         }
 
@@ -379,6 +492,7 @@ namespace ScienceWordOverlay.Models
                 HalfExtent = 1.68
             };
             CutPlane = plane;
+            ResetPartOffsets();
             return BuildPolySectionFromPlane(plane, labelGen, $"qua {m.Label} // ({a.Label}{b.Label}{c.Label})");
         }
 
@@ -391,17 +505,13 @@ namespace ScienceWordOverlay.Models
                     picked.Add(v);
             }
 
-            // 1. Lay cac dinh goc nam san tren mat phang (P)
             var baseEdges = Edges.Where(e => !e.IsConstruction).ToList();
-            var baseVertIds = new HashSet<string>();
-            foreach (var e in baseEdges) { baseVertIds.Add(e.V1Id); baseVertIds.Add(e.V2Id); }
             foreach (var v in Vertices)
             {
                 if (Math.Abs(plane.SignedDistance(v.Pos)) <= 0.025)
                     AddUnique(v);
             }
 
-            // 2. Tinh giao diem cua (P) voi tat ca cac canh con lai cua khoi da dien
             int newlyCreated = 0;
             foreach (var e in baseEdges)
             {
@@ -447,7 +557,6 @@ namespace ScienceWordOverlay.Models
             if (picked.Count < 3)
                 return (true, $"Đã dựng mặt phẳng (P) {desc} (chưa cắt đủ 3 cạnh để tạo đa giác thiết diện).");
 
-            // 3. Sap xep cac dinh thiet dien theo vong tron tren mat phang (P)
             Vec3 center = new(0, 0, 0);
             foreach (var v in picked) center = center + v.Pos;
             center = center * (1.0 / picked.Count);
@@ -458,7 +567,6 @@ namespace ScienceWordOverlay.Models
                 .OrderBy(vt => Math.Atan2(Vec3.Dot(vt.Pos - center, vAxis), Vec3.Dot(vt.Pos - center, u)))
                 .ToList();
 
-            // 4. Noi cac canh giao tuyen theo dung thu tu da giac
             for (int i = 0; i < ordered.Count; i++)
             {
                 var cur = ordered[i];
@@ -475,7 +583,6 @@ namespace ScienceWordOverlay.Models
                 }
             }
 
-            // 5. To kin da giac thiet dien
             Sections.Add(new Section3D
             {
                 VertexIds = ordered.Select(v => v.Id).ToList(),
@@ -484,7 +591,7 @@ namespace ScienceWordOverlay.Models
             });
 
             string polyName = string.Join("", ordered.Select(v => v.Label));
-            return (true, $"Đã dựng (P) {desc} → Thiết diện {polyName} ({ordered.Count} đỉnh, tự thêm {newlyCreated} giao điểm)! Kéo [Tách] để tách khối!");
+            return (true, $"Đã dựng (P) {desc} → Thiết diện {polyName} ({ordered.Count} đỉnh, tự thêm {newlyCreated} giao điểm)! Kéo từng phần hoặc [Tách]!");
         }
 
         public LivePolySectionResult ComputeLivePolySection(CutPlane3D plane)
@@ -534,6 +641,184 @@ namespace ScienceWordOverlay.Models
             return res;
         }
 
+        // ===================== CẮT TÁCH THỰC 3D THÀNH 2 NỬA ĐỘC LẬP (SUTHERLAND-HODGMAN) =====================
+        private static List<Vec3> ClipPolygonByHalfSpace(List<Vec3> poly, Vec3 planeOrigin, Vec3 planeNormal, bool keepPositive)
+        {
+            var output = new List<Vec3>();
+            int n = poly.Count;
+            if (n < 3) return output;
+            const double eps = 1e-5;
+
+            double Eval(Vec3 p)
+            {
+                double d = Vec3.Dot(p - planeOrigin, planeNormal);
+                return keepPositive ? d : -d;
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                Vec3 curr = poly[i];
+                Vec3 next = poly[(i + 1) % n];
+                double dC = Eval(curr), dN = Eval(next);
+                bool inC = dC >= -eps, inN = dN >= -eps;
+
+                if (inC && inN)
+                {
+                    output.Add(next);
+                }
+                else if (inC && !inN)
+                {
+                    double denom = dC - dN;
+                    if (Math.Abs(denom) > 1e-7) output.Add(curr + (next - curr) * (dC / denom));
+                }
+                else if (!inC && inN)
+                {
+                    double denom = dC - dN;
+                    if (Math.Abs(denom) > 1e-7) output.Add(curr + (next - curr) * (dC / denom));
+                    output.Add(next);
+                }
+            }
+            return output;
+        }
+
+        public List<(List<Vec3> pts3d, Vec3 outwardN, int partSide, bool isSectionCap)> ComputeSplitPolyHalves3D()
+        {
+            var result = new List<(List<Vec3>, Vec3, int, bool)>();
+            if (Kind != "poly" || CutPlane == null || !TryGetCutPlane(out Vec3 o, out Vec3 n)) return result;
+
+            Vec3 offAbove = GetPartOffset(1);
+            Vec3 offBelow = GetPartOffset(-1);
+
+            foreach (var f in Faces)
+            {
+                var raw = f.VertexIds.Select(GetV).Where(v => v != null).Select(v => v!.Pos).ToList();
+                if (raw.Count < 3) continue;
+                Vec3 fn = GetOutwardFaceNormal(f);
+
+                var upper = ClipPolygonByHalfSpace(raw, o, n, keepPositive: true);
+                if (upper.Count >= 3)
+                    result.Add((upper.Select(p => p + offAbove).ToList(), fn, 1, false));
+
+                var lower = ClipPolygonByHalfSpace(raw, o, n, keepPositive: false);
+                if (lower.Count >= 3)
+                    result.Add((lower.Select(p => p + offBelow).ToList(), fn, -1, false));
+            }
+
+            // Them mat nap thiet dien khep kin cho CA 2 NUA (tren & duoi) de khi keo roi thay ro mat cat!
+            var sec = ComputeLivePolySection(CutPlane);
+            if (sec.Points3D.Count >= 3)
+            {
+                result.Add((sec.Points3D.Select(p => p + offAbove).ToList(), n * -1.0, 1, true));
+                result.Add((sec.Points3D.Select(p => p + offBelow).ToList(), n, -1, true));
+            }
+            return result;
+        }
+
+        // ===================== GIAO 2 KHỐI 3D (SOLID INTERSECTION) =====================
+        public static List<Vec3> ComputeSolidIntersectionPoints(Solid3DScene a, Solid3DScene b)
+        {
+            var pts = new List<Vec3>();
+            void AddPt(Vec3 p)
+            {
+                if (!pts.Any(q => (q - p).Length < 0.04)) pts.Add(p);
+            }
+
+            // Quy doi tu khong gian local cua b sang khong gian local cua a
+            Vec3 MapBToA(Vec3 pb)
+            {
+                Point sp = b.Project(pb, out _);
+                return a.ScreenToLocalApprox(sp, pb.Z * 0.5);
+            }
+
+            bool InsideApproxA(Vec3 p)
+            {
+                if (a.Kind == "sphere") return (p - new Vec3(0, 0, 0)).Length <= a.Radius + 0.04;
+                if (a.Kind == "cylinder")
+                {
+                    double h2 = a.Height * 0.5;
+                    return Math.Abs(p.Y) <= h2 + 0.04 && Math.Sqrt(p.X * p.X + p.Z * p.Z) <= a.Radius + 0.04;
+                }
+                if (a.Kind == "cone")
+                {
+                    double h2 = a.Height * 0.5;
+                    if (p.Y < -h2 - 0.04 || p.Y > h2 + 0.04) return false;
+                    double frac = Math.Clamp((h2 - p.Y) / Math.Max(0.1, a.Height), 0.0, 1.0);
+                    return Math.Sqrt(p.X * p.X + p.Z * p.Z) <= a.Radius * frac + 0.04;
+                }
+                if (a.Vertices.Count == 0) return false;
+                Vec3 min = new(a.Vertices.Min(v => v.X) - 0.03, a.Vertices.Min(v => v.Y) - 0.03, a.Vertices.Min(v => v.Z) - 0.03);
+                Vec3 max = new(a.Vertices.Max(v => v.X) + 0.03, a.Vertices.Max(v => v.Y) + 0.03, a.Vertices.Max(v => v.Z) + 0.03);
+                return p.X >= min.X && p.X <= max.X && p.Y >= min.Y && p.Y <= max.Y && p.Z >= min.Z && p.Z <= max.Z;
+            }
+
+            // Lay cac canh cua khoi B (hoac vong tron xich dao/day neu la Cau/Non/Tru)
+            var segsB = new List<(Vec3 p1, Vec3 p2)>();
+            if (b.Kind == "sphere")
+            {
+                int n = 48;
+                for (int i = 0; i < n; i++)
+                {
+                    double t0 = 2 * Math.PI * i / n, t1 = 2 * Math.PI * (i + 1) / n;
+                    segsB.Add((new Vec3(b.Radius * Math.Cos(t0), 0, b.Radius * Math.Sin(t0)), new Vec3(b.Radius * Math.Cos(t1), 0, b.Radius * Math.Sin(t1))));
+                    segsB.Add((new Vec3(b.Radius * Math.Cos(t0), b.Radius * Math.Sin(t0), 0), new Vec3(b.Radius * Math.Cos(t1), b.Radius * Math.Sin(t1), 0)));
+                }
+            }
+            else if (b.Kind is "cone" or "cylinder")
+            {
+                int n = 48;
+                double h2 = b.Height * 0.5;
+                for (int i = 0; i < n; i++)
+                {
+                    double t0 = 2 * Math.PI * i / n, t1 = 2 * Math.PI * (i + 1) / n;
+                    Vec3 b0 = new(b.Radius * Math.Cos(t0), -h2, b.Radius * Math.Sin(t0));
+                    Vec3 b1 = new(b.Radius * Math.Cos(t1), -h2, b.Radius * Math.Sin(t1));
+                    segsB.Add((b0, b1));
+                    if (b.Kind == "cone") segsB.Add((new Vec3(0, h2, 0), b0));
+                    else
+                    {
+                        Vec3 u0 = new(b.Radius * Math.Cos(t0), h2, b.Radius * Math.Sin(t0));
+                        Vec3 u1 = new(b.Radius * Math.Cos(t1), h2, b.Radius * Math.Sin(t1));
+                        segsB.Add((u0, u1));
+                        if (i % 6 == 0) segsB.Add((b0, u0));
+                    }
+                }
+            }
+            else
+            {
+                foreach (var e in b.Edges)
+                {
+                    var v1 = b.GetV(e.V1Id); var v2 = b.GetV(e.V2Id);
+                    if (v1 != null && v2 != null) segsB.Add((v1.Pos, v2.Pos));
+                }
+            }
+
+            foreach (var (q1, q2) in segsB)
+            {
+                Vec3 m1 = MapBToA(q1), m2 = MapBToA(q2);
+                bool in1 = InsideApproxA(m1), in2 = InsideApproxA(m2);
+                if (in1 && in2) { AddPt(m1); AddPt(m2); }
+                else if (in1 != in2)
+                {
+                    double lo = 0.0, hi = 1.0;
+                    for (int k = 0; k < 16; k++)
+                    {
+                        double mid = 0.5 * (lo + hi);
+                        Vec3 pm = m1 + (m2 - m1) * mid;
+                        if (InsideApproxA(pm) == in1) lo = mid; else hi = mid;
+                    }
+                    AddPt(m1 + (m2 - m1) * (0.5 * (lo + hi)));
+                }
+            }
+            if (pts.Count >= 3)
+            {
+                Vec3 c = new(0, 0, 0);
+                foreach (var p in pts) c = c + p;
+                c = c * (1.0 / pts.Count);
+                pts.Sort((p1, p2) => Math.Atan2(p1.Z - c.Z, p1.X - c.X).CompareTo(Math.Atan2(p2.Z - c.Z, p2.X - c.X)));
+            }
+            return pts;
+        }
+
         // ===================== THIẾT DIỆN GIẢI TÍCH CHÍNH XÁC (CẦU / TRỤ / NÓN) =====================
         private static List<Vec3> IntersectPlaneWithHorizontalCircle(Vec3 n, double dPlane, double yLevel, double radius)
         {
@@ -575,7 +860,7 @@ namespace ScienceWordOverlay.Models
 
             if (Kind == "sphere")
             {
-                double dSigned = D; // Tam O = (0,0,0) -> n . (0 - Origin) = -D => H = n * D
+                double dSigned = D;
                 double d = Math.Abs(dSigned);
                 if (d >= Radius - 0.005) return res;
                 double r = Math.Sqrt(Math.Max(0.0, Radius * Radius - d * d));
@@ -692,6 +977,220 @@ namespace ScienceWordOverlay.Models
             return res;
         }
 
+        // ===================== KHAI TRIỂN NET 3D (GIỐNG GEOGEBRA NET) =====================
+        private static Vec3 RotatePointAroundAxis(Vec3 p, Vec3 axisOrigin, Vec3 axisUnitDir, double angleRad)
+        {
+            if (Math.Abs(angleRad) < 1e-6) return p;
+            Vec3 v = p - axisOrigin;
+            double cosA = Math.Cos(angleRad), sinA = Math.Sin(angleRad);
+            Vec3 kCrossV = Vec3.Cross(axisUnitDir, v);
+            double kDotV = Vec3.Dot(axisUnitDir, v);
+            Vec3 vRot = v * cosA + kCrossV * sinA + axisUnitDir * (kDotV * (1.0 - cosA));
+            return axisOrigin + vRot;
+        }
+
+        private static double ComputeDihedralUnfoldAngle(Vec3 baseOutwardN, Vec3 sideOutwardN, Vec3 hingeVec)
+        {
+            // Quay phap tuyen huong ngoai cua mat ben trung khit voi phap tuyen huong ngoai cua mat day -> tu dong mo ra PHIA NGOAI 100%!
+            double dot = Math.Clamp(Vec3.Dot(sideOutwardN, baseOutwardN), -1.0, 1.0);
+            double theta = Math.Acos(dot);
+            if (theta < 1e-4) return 0.0;
+
+            Vec3 hDir = hingeVec.Normalized();
+            Vec3 nPlus = RotatePointAroundAxis(sideOutwardN, new Vec3(0, 0, 0), hDir, theta);
+            Vec3 nMinus = RotatePointAroundAxis(sideOutwardN, new Vec3(0, 0, 0), hDir, -theta);
+            return Vec3.Dot(nPlus, baseOutwardN) >= Vec3.Dot(nMinus, baseOutwardN) ? theta : -theta;
+        }
+
+        public List<(List<Vec3> pts3d, string label, bool isBase, bool isTopCap)> ComputeNetFacePolygons3D()
+        {
+            var result = new List<(List<Vec3> pts3d, string label, bool isBase, bool isTopCap)>();
+            double t = Math.Clamp(UnfoldProgress, 0.0, 1.0);
+
+            if (Kind == "poly" && Faces.Count >= 4)
+            {
+                // Face[0] la mat day chuan
+                var baseFace = Faces[0];
+                var basePts = baseFace.VertexIds.Select(GetV).Where(v => v != null).Select(v => v!.Pos).ToList();
+                if (basePts.Count < 3) return result;
+
+                Vec3 baseN = GetOutwardFaceNormal(baseFace);
+                Vec3 baseCenter = new(0, 0, 0);
+                foreach (var p in basePts) baseCenter = baseCenter + p;
+                baseCenter = baseCenter * (1.0 / basePts.Count);
+
+                result.Add((basePts, string.Join("", baseFace.VertexIds.Select(id => GetV(id)?.Label ?? "")), true, false));
+
+                int m = baseFace.VertexIds.Count;
+                // Xac dinh xem day la Chop (1 dinh chung S) hay Lang tru / Hop / Lap phuong (co nap tren Faces[1])
+                bool isPrismLike = Faces.Count >= m + 2 && Faces[1].VertexIds.Count == m;
+                int sideStartIdx = isPrismLike ? 2 : 1;
+                int topCapIdx = isPrismLike ? 1 : -1;
+
+                var sideRotations = new Dictionary<int, (Vec3 hA, Vec3 hDir, double fullAngle, double curAngle)>();
+
+                for (int edgeIdx = 0; edgeIdx < m; edgeIdx++)
+                {
+                    string b1Id = baseFace.VertexIds[edgeIdx];
+                    string b2Id = baseFace.VertexIds[(edgeIdx + 1) % m];
+                    var vb1 = GetV(b1Id); var vb2 = GetV(b2Id);
+                    if (vb1 == null || vb2 == null) continue;
+
+                    int foundFaceIdx = -1;
+                    for (int fIdx = sideStartIdx; fIdx < Faces.Count; fIdx++)
+                    {
+                        var fv = Faces[fIdx].VertexIds;
+                        if (fv.Contains(b1Id) && fv.Contains(b2Id)) { foundFaceIdx = fIdx; break; }
+                    }
+                    if (foundFaceIdx < 0) continue;
+
+                    var sideFace = Faces[foundFaceIdx];
+                    var rawSidePts = sideFace.VertexIds.Select(GetV).Where(v => v != null).Select(v => v!.Pos).ToList();
+                    Vec3 sideN = GetOutwardFaceNormal(sideFace);
+                    Vec3 hingeVec = vb2.Pos - vb1.Pos;
+                    double fullAngle = ComputeDihedralUnfoldAngle(baseN, sideN, hingeVec);
+                    double curAngle = fullAngle * t;
+                    Vec3 hDir = hingeVec.Normalized();
+
+                    sideRotations[edgeIdx] = (vb1.Pos, hDir, fullAngle, curAngle);
+                    var unfoldedSide = rawSidePts.Select(p => RotatePointAroundAxis(p, vb1.Pos, hDir, curAngle)).ToList();
+                    string fLbl = string.Join("", sideFace.VertexIds.Select(id => GetV(id)?.Label ?? ""));
+                    result.Add((unfoldedSide, fLbl, false, false));
+                }
+
+                // Neu la Lang tru / Hop CN / Lap phuong: tinh goc fullAngle2 o trang thai t=1 truoc, sau do noi suy muot theo t (khong giat goc)!
+                if (isPrismLike && topCapIdx >= 0)
+                {
+                    var topFace = Faces[topCapIdx];
+                    var rawTopPts = topFace.VertexIds.Select(GetV).Where(v => v != null).Select(v => v!.Pos).ToList();
+                    int hingeEdge = ((TopCapHingeIdx % m) + m) % m;
+
+                    if (sideRotations.TryGetValue(hingeEdge, out var rot1))
+                    {
+                        string b1Id = baseFace.VertexIds[hingeEdge];
+                        string b2Id = baseFace.VertexIds[(hingeEdge + 1) % m];
+                        int fSideIdx = -1;
+                        for (int fIdx = sideStartIdx; fIdx < Faces.Count; fIdx++)
+                            if (Faces[fIdx].VertexIds.Contains(b1Id) && Faces[fIdx].VertexIds.Contains(b2Id)) { fSideIdx = fIdx; break; }
+
+                        if (fSideIdx >= 0)
+                        {
+                            var sideIds = Faces[fSideIdx].VertexIds;
+                            var topSharedIds = sideIds.Where(id => topFace.VertexIds.Contains(id)).ToList();
+                            if (topSharedIds.Count >= 2)
+                            {
+                                var vt1 = GetV(topSharedIds[0]); var vt2 = GetV(topSharedIds[1]);
+                                if (vt1 != null && vt2 != null)
+                                {
+                                    Vec3 topN = GetOutwardFaceNormal(topFace);
+                                    Vec3 topNFull1 = RotatePointAroundAxis(topN, new Vec3(0, 0, 0), rot1.hDir, rot1.fullAngle);
+                                    Vec3 pTop1Full = RotatePointAroundAxis(vt1.Pos, rot1.hA, rot1.hDir, rot1.fullAngle);
+                                    Vec3 pTop2Full = RotatePointAroundAxis(vt2.Pos, rot1.hA, rot1.hDir, rot1.fullAngle);
+                                    double fullAngle2 = ComputeDihedralUnfoldAngle(baseN, topNFull1, pTop2Full - pTop1Full);
+
+                                    // Ap dung quay muot theo t: quay quanh ban le day (rot1.curAngle), sau do quay quanh ban le tren (fullAngle2 * t)
+                                    Vec3 pTop1Cur = RotatePointAroundAxis(vt1.Pos, rot1.hA, rot1.hDir, rot1.curAngle);
+                                    Vec3 pTop2Cur = RotatePointAroundAxis(vt2.Pos, rot1.hA, rot1.hDir, rot1.curAngle);
+                                    Vec3 h2DirCur = (pTop2Cur - pTop1Cur).Normalized();
+                                    var step1Pts = rawTopPts.Select(p => RotatePointAroundAxis(p, rot1.hA, rot1.hDir, rot1.curAngle)).ToList();
+                                    var finalTopPts = step1Pts.Select(p => RotatePointAroundAxis(p, pTop1Cur, h2DirCur, fullAngle2 * t)).ToList();
+
+                                    string topLbl = string.Join("", topFace.VertexIds.Select(id => GetV(id)?.Label ?? ""));
+                                    result.Add((finalTopPts, topLbl, false, true));
+                                }
+                            }
+                        }
+                    }
+                }
+                return result;
+            }
+
+            if (Kind is "cone" or "cylinder")
+            {
+                // Khai trien Net cho Hinh Non (hinh quat tron + day tron) & Hinh Tru (hinh chu nhat + 2 day tron)
+                bool isCone = Kind == "cone";
+                double R = Radius, h = Height, h2 = h * 0.5;
+                int n = 48;
+
+                // Day duoi (nam ngang tai y = -h2)
+                var botPoly = new List<Vec3>(n);
+                for (int i = 0; i < n; i++)
+                {
+                    double th = 2 * Math.PI * i / n;
+                    botPoly.Add(new Vec3(R * Math.Cos(th), -h2, R * Math.Sin(th)));
+                }
+                result.Add((botPoly, "Đáy (O)", true, false));
+
+                if (isCone)
+                {
+                    double slant = Math.Sqrt(R * R + h * h);
+                    double sectorAngle = 2.0 * Math.PI * R / Math.Max(0.1, slant);
+                    // Khi t = 0: hinh non dong; khi t = 1: hinh quat ban kinh slant trai phang tren mat phang y = -h2!
+                    int segs = 40;
+                    var sectorPts = new List<Vec3>(segs + 2);
+                    Vec3 pivot = new(0, -h2, R); // Diem tiep xuc giua day va hinh quat
+                    Vec3 apex3D = new(0, h2, 0);
+                    Vec3 apexFlat = new(0, -h2, R + slant);
+                    Vec3 apexCur = apex3D * (1.0 - t) + apexFlat * t;
+                    sectorPts.Add(apexCur);
+
+                    for (int i = 0; i <= segs; i++)
+                    {
+                        double u = -0.5 + (double)i / segs; // -0.5 .. 0.5
+                        double thCone = u * 2.0 * Math.PI;
+                        Vec3 pCone = new(R * Math.Sin(thCone), -h2, R * Math.Cos(thCone));
+                        double thFlat = u * sectorAngle;
+                        Vec3 pFlat = apexFlat + new Vec3(slant * Math.Sin(thFlat), -h2 + h2, -slant * Math.Cos(thFlat));
+                        pFlat.Y = -h2;
+                        sectorPts.Add(pCone * (1.0 - t) + pFlat * t);
+                    }
+                    result.Add((sectorPts, "Mặt xung quanh (Quạt tròn)", false, false));
+                }
+                else
+                {
+                    // Hinh tru: mat xung quanh trai thanh hinh chu nhat (2*pi*R x H) + day tren lat phang
+                    double circ = 2.0 * Math.PI * R;
+                    int segs = 40;
+                    var latPts = new List<Vec3>(segs * 2 + 2);
+                    for (int i = 0; i <= segs; i++)
+                    {
+                        double u = -0.5 + (double)i / segs;
+                        double th = u * 2.0 * Math.PI;
+                        Vec3 pCyl = new(R * Math.Sin(th), -h2, R * Math.Cos(th));
+                        Vec3 pFlat = new(u * circ, -h2, R);
+                        latPts.Add(pCyl * (1.0 - t) + pFlat * t);
+                    }
+                    for (int i = segs; i >= 0; i--)
+                    {
+                        double u = -0.5 + (double)i / segs;
+                        double th = u * 2.0 * Math.PI;
+                        Vec3 pCyl = new(R * Math.Sin(th), h2, R * Math.Cos(th));
+                        Vec3 pFlat = new(u * circ, -h2, R + h);
+                        latPts.Add(pCyl * (1.0 - t) + pFlat * t);
+                    }
+                    result.Add((latPts, "Mặt xung quanh (HCN)", false, false));
+
+                    // Day tren lat xuong tai z = R + h + R
+                    var topPoly = new List<Vec3>(n);
+                    Vec3 topCenterCyl = new(0, h2, 0);
+                    Vec3 topCenterFlat = new(0, -h2, R + h + R);
+                    Vec3 curCenter = topCenterCyl * (1.0 - t) + topCenterFlat * t;
+                    double tiltAngle = (Math.PI * 0.5) * t;
+                    for (int i = 0; i < n; i++)
+                    {
+                        double th = 2 * Math.PI * i / n;
+                        double lx = R * Math.Cos(th);
+                        double lz = -R * Math.Sin(th);
+                        double ly = lz * Math.Sin(tiltAngle);
+                        double lzRot = lz * Math.Cos(tiltAngle);
+                        topPoly.Add(curCenter + new Vec3(lx, ly, lzRot));
+                    }
+                    result.Add((topPoly, "Đáy trên (O')", false, true));
+                }
+            }
+            return result;
+        }
+
         public Vertex3D? ConstructParallelEdge3D(string fromVertexId, Edge3D refEdge, Func<string> labelGen)
         {
             var m = GetV(fromVertexId); var u1 = GetV(refEdge.V1Id); var u2 = GetV(refEdge.V2Id);
@@ -729,7 +1228,22 @@ namespace ScienceWordOverlay.Models
             void AddE(string a, string b) => s.Edges.Add(new Edge3D { V1Id = a, V2Id = b });
             void AddF(params string[] vs) => s.Faces.Add(new Face3D { VertexIds = vs.ToList() });
 
-            if (kind is "pyramid_para" or "pyramid_perp")
+            if (kind == "plane_only")
+            {
+                s.Kind = "plane_only"; s.Name = "Mặt phẳng (P)"; s.IsSolidShaded = true; s.SolidColorHex = "#38BDF8";
+                s.CutPlane = new CutPlane3D
+                {
+                    Label = "(P)",
+                    Origin = new Vec3(0, 0, 0),
+                    Normal = new Vec3(0, 1, 0),
+                    Visible = true,
+                    IsInteractive = true,
+                    PlaneColorHex = "#38BDF8",
+                    SectionColorHex = "#FACC15",
+                    HalfExtent = 1.65
+                };
+            }
+            else if (kind is "pyramid_para" or "pyramid_perp")
             {
                 s.Kind = "poly"; s.IsSolidShaded = false;
                 s.Name = kind == "pyramid_perp" ? "Chóp S.ABCD (SA ⊥ đáy)" : "Chóp S.ABCD (đáy hình bình hành)";

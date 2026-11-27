@@ -31,7 +31,41 @@ namespace ScienceWordOverlay
         public OfficeSelectionContext? OfficeContext { get; private set; }
 
         public CanvasBackgroundMode CanvasBg { get; set; } = CanvasBackgroundMode.Transparent;
-        public Solid3DScene? Solid3D { get; set; }
+        public List<Solid3DScene> Solids3DList { get; } = new();
+        public Solid3DScene? Solid3D
+        {
+            get => Solids3DList.LastOrDefault();
+            set
+            {
+                if (value == null)
+                {
+                    if (Solids3DList.Count > 0) Solids3DList.RemoveAt(Solids3DList.Count - 1);
+                }
+                else
+                {
+                    int idx = Solids3DList.IndexOf(value);
+                    if (idx >= 0) { Solids3DList.RemoveAt(idx); Solids3DList.Add(value); }
+                    else Solids3DList.Add(value);
+                }
+            }
+        }
+        public bool KeepPreviousSolids3D { get; set; } = true;
+        public bool ShowCoordSystem3D { get; set; } = false;
+        private readonly DispatcherTimer _netUnfoldTimer;
+        private double _netTargetProgress = 0.0;
+        public event Action<double>? NetProgressUpdated;
+        private Solid3DScene? _activeOrbitSolid3D;
+        private Solid3DScene? _activeMoveSolid3D;
+        private int _draggingCutPartSide = 0; // +1 above plane, -1 below plane
+        private readonly List<Vec3> _arbitraryPlanePoints = new();
+        private Solid3DScene? _intersectSolidA;
+        private Solid3DScene? _intersectSolidB;
+
+        // Cached static Typefaces for zero-allocation 60fps rendering
+        private static readonly Typeface TfMathItalicBold = new(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
+        private static readonly Typeface TfMathItalic = new(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
+        private static readonly Typeface TfUiBold = new(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+        private static readonly Typeface TfUiSemiBold = new(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
         private bool _isOrbiting3D = false;
         private bool _isMoving3D = false;
         private Point _orbitLastPos;
@@ -146,6 +180,69 @@ namespace ScienceWordOverlay
 
             _spin3DAxisTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _spin3DAxisTimer.Tick += OnSpin3DAxisTick;
+
+            _netUnfoldTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _netUnfoldTimer.Tick += OnNetUnfoldTick;
+        }
+
+        private void OnNetUnfoldTick(object? sender, EventArgs e)
+        {
+            if (Solid3D == null) { _netUnfoldTimer.Stop(); return; }
+            double cur = Solid3D.UnfoldProgress;
+            double diff = _netTargetProgress - cur;
+            if (Math.Abs(diff) <= 0.025)
+            {
+                Solid3D.UnfoldProgress = _netTargetProgress;
+                _netUnfoldTimer.Stop();
+            }
+            else
+            {
+                Solid3D.UnfoldProgress = Math.Clamp(cur + Math.Sign(diff) * 0.032, 0.0, 1.0);
+            }
+            NetProgressUpdated?.Invoke(Solid3D.UnfoldProgress * 100.0);
+            InvalidateVisual();
+        }
+
+        public void SetNetUnfoldProgress3D(double pct)
+        {
+            if (Solid3D == null) return;
+            _netUnfoldTimer.Stop();
+            Solid3D.UnfoldProgress = Math.Clamp(pct / 100.0, 0.0, 1.0);
+            NetProgressUpdated?.Invoke(Solid3D.UnfoldProgress * 100.0);
+            InvalidateVisual();
+        }
+
+        public void ToggleNetUnfold3D()
+        {
+            if (Solid3D == null)
+            {
+                ShowToast("Hãy tạo 1 khối 3D (Chóp, Lăng trụ, Lập phương, Hộp CN, Nón, Trụ) từ [Vẽ 3D ▾] trước!");
+                return;
+            }
+            if (Solid3D.Kind is "sphere" or "plane_only")
+            {
+                ShowToast("Mặt cầu và Mặt phẳng đơn không có khai triển trải phẳng Net!");
+                return;
+            }
+            Solid3D.CutPlane = null;
+            Solid3D.ResetPartOffsets();
+            _netTargetProgress = Solid3D.UnfoldProgress < 0.5 ? 1.0 : 0.0;
+            _netUnfoldTimer.Start();
+            RefreshSolid3DMenu();
+            ShowToast(_netTargetProgress > 0.5
+                ? "📦 Đang khai triển trải phẳng Net (giống GeoGebra) — kéo thanh [Net: %] để điều chỉnh góc mở!"
+                : "📦 Đang gấp lại thành khối 3D ban đầu!");
+        }
+
+        public void CycleNetTopHinge3D()
+        {
+            if (Solid3D == null || Solid3D.Faces.Count == 0) return;
+            int m = Math.Max(3, Solid3D.Faces[0].VertexIds.Count);
+            Solid3D.TopCapHingeIdx = (Solid3D.TopCapHingeIdx + 1) % m;
+            if (Solid3D.UnfoldProgress < 0.05) Solid3D.UnfoldProgress = 1.0;
+            NetProgressUpdated?.Invoke(Solid3D.UnfoldProgress * 100.0);
+            InvalidateVisual();
+            ShowToast($"Đã đổi cạnh bản lề nắp trên sang cạnh #{Solid3D.TopCapHingeIdx + 1}");
         }
 
         private void OnSpin3DAxisTick(object? sender, EventArgs e)
@@ -323,10 +420,77 @@ namespace ScienceWordOverlay
         {
             double cx = ActualWidth > 100 ? ActualWidth * 0.45 : 480;
             double cy = ActualHeight > 100 ? ActualHeight * 0.54 : 420;
-            Solid3D = Solid3DScene.CreatePreset(presetKind, new Point(cx, cy));
-            _step3DVertices.Clear(); _pending3DParallelVertex = null;
+            int idx = Solids3DList.Count;
+            double ox = KeepPreviousSolids3D ? ((idx % 4) - 1.5) * 145.0 : 0.0;
+            double oy = KeepPreviousSolids3D ? ((idx / 4) % 2) * 35.0 : 0.0;
+            if (!KeepPreviousSolids3D) Solids3DList.Clear();
+
+            var created = Solid3DScene.CreatePreset(presetKind, new Point(cx + ox, cy + oy));
+            Solids3DList.Add(created);
+            NetProgressUpdated?.Invoke(0.0);
+            _step3DVertices.Clear(); _pending3DParallelVertex = null; _arbitraryPlanePoints.Clear();
             SetTool("select"); InvalidateVisual(); RefreshSolid3DMenu();
-            ShowToast($"Đã tạo {Solid3D.Name}! Kéo trái di chuyển, kéo phải xoay 3D, hoặc bấm nút trên menu nổi.", 4500);
+            ShowToast(KeepPreviousSolids3D && Solids3DList.Count > 1
+                ? $"Đã thêm {created.Name} (giữ {Solids3DList.Count} khối 3D trên màn hình)! Kéo di chuyển hoặc chọn [Giao 2 khối]."
+                : $"Đã tạo {created.Name}! Kéo trái di chuyển, kéo phải xoay 3D, hoặc bấm nút trên menu nổi.", 4500);
+        }
+
+        public void StopAllTimers()
+        {
+            _toastTimer.Stop();
+            _animDrawTimer.Stop();
+            _spin3DAxisTimer.Stop();
+            _netUnfoldTimer.Stop();
+        }
+
+        public void ClearAllSolids3D()
+        {
+            _netUnfoldTimer.Stop();
+            Solids3DList.Clear();
+            _intersectSolidA = null;
+            _intersectSolidB = null;
+            _arbitraryPlanePoints.Clear();
+            _step3DVertices.Clear();
+            _pending3DParallelVertex = null;
+            if (RevScene == null) SetSpinAxis3D(SpinAxisMode.None);
+            NetProgressUpdated?.Invoke(0.0);
+            ContextMenuRequested?.Invoke("", null);
+            InvalidateVisual();
+            ShowToast("Đã xóa toàn bộ các khối 3D");
+        }
+
+        public void ToggleCoordSystem3D()
+        {
+            ShowCoordSystem3D = !ShowCoordSystem3D;
+            InvalidateVisual();
+            ShowToast(ShowCoordSystem3D ? "🌐 Đã bật Hệ tọa độ không gian Oxyz" : "🌐 Đã ẩn Hệ tọa độ không gian Oxyz");
+        }
+
+
+
+        public void IntersectActiveSolids3D()
+        {
+            if (Solids3DList.Count < 2)
+            {
+                ShowToast("Cần có ít nhất 2 khối 3D trên màn hình để tính giao khối! Hãy tạo thêm khối khác (giữ khối cũ).", 4200);
+                return;
+            }
+            var a = Solids3DList[^1];
+            var b = Solids3DList[^2];
+            if (_intersectSolidA == a && _intersectSolidB == b)
+            {
+                _intersectSolidA = null; _intersectSolidB = null;
+                InvalidateVisual(); RefreshSolid3DMenu();
+                ShowToast("Đã tắt hiển thị vùng giao 2 khối 3D.");
+                return;
+            }
+            _intersectSolidA = a;
+            _intersectSolidB = b;
+            var pts = Solid3DScene.ComputeSolidIntersectionPoints(a, b);
+            InvalidateVisual(); RefreshSolid3DMenu();
+            ShowToast(pts.Count > 0
+                ? $"✓ Đang bật giao trực tiếp {a.Name} ∩ {b.Name} ({pts.Count} điểm giao — kéo/xoay khối để xem cập nhật theo thời gian thực)!"
+                : $"Đã gắn theo dõi giao {a.Name} ∩ {b.Name} — hãy kéo 2 khối chồng lên nhau để thấy đường giao tự động xuất hiện!", 4800);
         }
 
         public void ToggleSolid3DShaded()
@@ -348,7 +512,21 @@ namespace ScienceWordOverlay
         }
 
         public void ScaleSolid3D(double factor) { if (Solid3D == null) return; Solid3D.Scale = Math.Clamp(Solid3D.Scale * factor, 55.0, 290.0); InvalidateVisual(); RefreshSolid3DMenu(); }
-        public void DeleteSolid3D() { Solid3D = null; if (RevScene == null) SetVerticalSpin3D(false); _step3DVertices.Clear(); _pending3DParallelVertex = null; ContextMenuRequested?.Invoke("", null); InvalidateVisual(); ShowToast("Đã xóa khối 3D"); }
+        public void DeleteSolid3D()
+        {
+            if (Solids3DList.Count == 0) return;
+            var removed = Solids3DList[^1];
+            Solids3DList.RemoveAt(Solids3DList.Count - 1);
+            _netUnfoldTimer.Stop();
+            if (_intersectSolidA == removed || _intersectSolidB == removed) { _intersectSolidA = null; _intersectSolidB = null; }
+            if (Solids3DList.Count == 0 && RevScene == null) SetSpinAxis3D(SpinAxisMode.None);
+            _step3DVertices.Clear(); _pending3DParallelVertex = null;
+            NetProgressUpdated?.Invoke((Solid3D?.UnfoldProgress ?? 0.0) * 100.0);
+            if (Solids3DList.Count > 0) RefreshSolid3DMenu();
+            else ContextMenuRequested?.Invoke("", null);
+            InvalidateVisual();
+            ShowToast(Solids3DList.Count > 0 ? $"Đã xóa 1 khối 3D (còn {Solids3DList.Count} khối)" : "Đã xóa khối 3D");
+        }
 
         public void SpawnInteractiveCutPlane3D()
         {
@@ -399,9 +577,17 @@ namespace ScienceWordOverlay
         {
             if (Solid3D == null) return;
             Solid3D.CutPlane = null;
-            Solid3D.SplitAmount = 0.0;
+            Solid3D.ResetPartOffsets();
             InvalidateVisual(); RefreshSolid3DMenu();
-            ShowToast("Đã gỡ Mặt phẳng cắt (P)");
+            ShowToast("Đã gỡ Mặt phẳng cắt (P) & ghép khít khối");
+        }
+
+        public void ResetSolidPartOffsets()
+        {
+            if (Solid3D == null) return;
+            Solid3D.ResetPartOffsets();
+            InvalidateVisual(); RefreshSolid3DMenu();
+            ShowToast("↺ Đã ghép khít các phần đã tách của khối 3D");
         }
 
         // ================= TEXT-MATH & CHỮ VIẾT TAY TƯƠNG TÁC =================
@@ -857,39 +1043,91 @@ namespace ScienceWordOverlay
             InvalidateVisual(); RefreshActiveSelectionMenu(); ShowToast("Đã nhân bản đối tượng đang chọn!");
         }
 
-        private Rect GetSolid3DBounds()
+        private Rect GetSolid3DBoundsFor(Solid3DScene? sc)
         {
-            if (Solid3D == null) return Rect.Empty;
+            if (sc == null) return Rect.Empty;
             var xs = new List<double>(); var ys = new List<double>();
-            if (Solid3D.Kind == "sphere")
+            if (sc.IsNetUnfolded)
             {
-                Point c = Solid3D.Project(new Vec3(0, 0, 0), out _);
-                double r = Solid3D.Radius * Solid3D.Scale;
+                foreach (var (pts3d, _, _, _) in sc.ComputeNetFacePolygons3D())
+                    foreach (var p3 in pts3d) { Point p = sc.Project(p3, out _); xs.Add(p.X); ys.Add(p.Y); }
+            }
+            else if (sc.Kind == "sphere")
+            {
+                Vec3 offSph = sc.GetPartOffset(sc.GetPartSideSign(new Vec3(0, 0, 0)));
+                Point c = sc.Project(offSph, out _);
+                double r = sc.Radius * sc.Scale;
                 xs.Add(c.X - r); xs.Add(c.X + r); ys.Add(c.Y - r); ys.Add(c.Y + r);
             }
             else
             {
-                foreach (var v in Solid3D.Vertices) { Point p = Solid3D.Project(Solid3D.GetEffectivePos(v, true), out _); xs.Add(p.X); ys.Add(p.Y); }
-                if (Solid3D.Kind is "cone" or "cylinder")
+                if (sc.Kind == "poly" && sc.HasActiveSplit)
                 {
-                    double h2 = Solid3D.Height * 0.5;
+                    foreach (var (pts3d, _, _, _) in sc.ComputeSplitPolyHalves3D())
+                        foreach (var p3 in pts3d) { Point p = sc.Project(p3, out _); xs.Add(p.X); ys.Add(p.Y); }
+                }
+                foreach (var v in sc.Vertices) { Point p = sc.Project(sc.GetEffectivePos(v, true), out _); xs.Add(p.X); ys.Add(p.Y); }
+                if (sc.Kind is "cone" or "cylinder")
+                {
+                    double h2 = sc.Height * 0.5;
                     for (int i = 0; i < 24; i++)
                     {
-                        double th = 2 * Math.PI * i / 24.0, cx = Solid3D.Radius * Math.Cos(th), cz = Solid3D.Radius * Math.Sin(th);
-                        Point pb = Solid3D.Project(new Vec3(cx, -h2, cz), out _); xs.Add(pb.X); ys.Add(pb.Y);
-                        if (Solid3D.Kind == "cylinder") { Point pt = Solid3D.Project(new Vec3(cx, h2, cz), out _); xs.Add(pt.X); ys.Add(pt.Y); }
+                        double th = 2 * Math.PI * i / 24.0, cx = sc.Radius * Math.Cos(th), cz = sc.Radius * Math.Sin(th);
+                        Vec3 pb3 = new(cx, -h2, cz);
+                        Point pb = sc.Project(pb3 + sc.GetPartOffset(sc.GetPartSideSign(pb3)), out _); xs.Add(pb.X); ys.Add(pb.Y);
+                        if (sc.Kind == "cylinder")
+                        {
+                            Vec3 pt3 = new(cx, h2, cz);
+                            Point pt = sc.Project(pt3 + sc.GetPartOffset(sc.GetPartSideSign(pt3)), out _); xs.Add(pt.X); ys.Add(pt.Y);
+                        }
                     }
                 }
             }
-            if (Solid3D.CutPlane != null && Solid3D.CutPlane.Visible)
+            if (sc.CutPlane != null && sc.CutPlane.Visible && !sc.IsNetUnfolded)
             {
-                foreach (var corner in Solid3D.CutPlane.GetQuadCorners())
+                foreach (var corner in sc.CutPlane.GetQuadCorners())
                 {
-                    Point pc = Solid3D.Project(corner, out _);
+                    Point pc = sc.Project(corner, out _);
                     xs.Add(pc.X); ys.Add(pc.Y);
                 }
             }
             return xs.Count == 0 ? Rect.Empty : new Rect(xs.Min() - 12, ys.Min() - 12, xs.Max() - xs.Min() + 24, ys.Max() - ys.Min() + 24);
+        }
+
+        private Rect GetSolid3DBounds() => GetSolid3DBoundsFor(Solid3D);
+
+        private Solid3DScene? FindSolid3DAt(Point pos)
+        {
+            for (int i = Solids3DList.Count - 1; i >= 0; i--)
+                if (GetSolid3DBoundsFor(Solids3DList[i]).Contains(pos)) return Solids3DList[i];
+            return null;
+        }
+
+        private int HitTestCutPartSide(Solid3DScene sc, Point pos)
+        {
+            if (sc.CutPlane == null || !sc.TryGetCutPlane(out Vec3 o, out Vec3 n)) return 0;
+            bool hasSplit = sc.SplitAmount > 0.01 || sc.PartOffsetAbove.Length > 0.01 || sc.PartOffsetBelow.Length > 0.01;
+            if (!hasSplit) return 0;
+
+            if (sc.Kind == "poly" && sc.Vertices.Count > 0)
+            {
+                int bestSide = 0;
+                double bestDist = double.MaxValue;
+                foreach (var v in sc.Vertices)
+                {
+                    int side = sc.GetPartSideSign(v.Pos);
+                    if (side == 0) continue;
+                    Point sp = sc.Project(sc.GetEffectivePos(v, true), out _);
+                    double d = Dist(pos, sp);
+                    if (d < bestDist) { bestDist = d; bestSide = side; }
+                }
+                return bestSide;
+            }
+            // Voi Non / Tru / Cau: so sanh vi tri click voi mat phang cat da dich chuyen
+            Point pCutScreen = sc.Project(o, out _);
+            Vec3 rotN = sc.RotatePoint(n);
+            double signScreen = (pos.X - pCutScreen.X) * rotN.X - (pos.Y - pCutScreen.Y) * rotN.Y;
+            return signScreen >= 0 ? 1 : -1;
         }
 
         private void RefreshSolid3DMenu() { var b = GetSolid3DBounds(); if (!b.IsEmpty) ContextMenuRequested?.Invoke("3d", new Point(b.Left, b.Top)); }
@@ -955,9 +1193,14 @@ namespace ScienceWordOverlay
             Scene = new SceneState();
             MagicFills.Clear();
             OfficeContext = null;
+            _netUnfoldTimer.Stop();
             RevScene = null;
-            Solid3D = null;
+            Solids3DList.Clear();
+            _intersectSolidA = null;
+            _intersectSolidB = null;
+            _arbitraryPlanePoints.Clear();
             _step3DVertices.Clear();
+            NetProgressUpdated?.Invoke(0.0);
             _pending3DParallelVertex = null;
             ContextMenuRequested?.Invoke("", null);
             ActiveSnipRect = null;
@@ -1211,11 +1454,12 @@ namespace ScienceWordOverlay
                 "pen" => "Bút vẽ tay: Giữ chuột trái để viết/vẽ trực tiếp",
                 "highlighter" => "Bút dạ quang: Giữ chuột trái để tô sáng nội dung bên dưới",
                 "text" => "Chữ / Ghi chú: Click vị trí muốn chèn chữ",
-                "plane_3pts_3d" => "Mp (P) qua 3 điểm: Click lần lượt 3 đỉnh hoặc trực tiếp lên cạnh khối 3D!",
+                "plane_3pts_3d" => "Mp (P) qua 3 điểm bất kỳ: Click 3 đỉnh, cạnh hoặc điểm tự do bất kỳ (trong/ngoài khối) để dựng (P)!",
                 "plane_para_3d" => "Mp (P) qua 1 điểm // mặt: Click 1 điểm đi qua, sau đó click 3 đỉnh xác định mặt phẳng chuẩn!",
+                "intersect_solids_3d" => "Giao 2 khối 3D: Click 2 khối 3D để tính & làm nổi bật giao điểm / giao tuyến!",
                 _ => $"Công cụ: {toolName}"
             };
-            _step3DVertices.Clear(); _pending3DParallelVertex = null;
+            _step3DVertices.Clear(); _pending3DParallelVertex = null; _arbitraryPlanePoints.Clear();
             if (toolName is not "select" and not "orbit_3d" and not "add_bound" and not "point_edge_3d" and not "edge_3d" and not "parallel_3d" and not "section_3d" and not "plane_3pts_3d" and not "plane_para_3d")
                 ContextMenuRequested?.Invoke("", null);
             ActiveToolChanged?.Invoke(toolName);
@@ -1572,8 +1816,11 @@ namespace ScienceWordOverlay
 
             if (e.ChangedButton == MouseButton.Right)
             {
-                if (Solid3D != null && GetSolid3DBounds().Contains(pos))
+                var hitS3 = FindSolid3DAt(pos);
+                if (hitS3 != null)
                 {
+                    Solids3DList.Remove(hitS3); Solids3DList.Add(hitS3);
+                    _activeOrbitSolid3D = hitS3;
                     _isOrbiting3D = true; _orbitLastPos = pos; CaptureMouse(); RefreshSolid3DMenu(); return;
                 }
                 if (RevScene != null && RevScene.IsValid && RevMode == MathRenderMode.Solid3D)
@@ -1635,10 +1882,107 @@ namespace ScienceWordOverlay
                 }
             }
 
-            // 0.2 Tương tác Khối 3D thực
-            if (Solid3D != null && Tool is "orbit_3d" or "point_edge_3d" or "edge_3d" or "parallel_3d" or "section_3d" or "plane_3pts_3d" or "plane_para_3d")
+            // 0.2 Tương tác Khối 3D thực & Mặt phẳng bất kỳ
+            if (Tool == "plane_3pts_3d")
             {
-                if (Tool == "orbit_3d") { _isOrbiting3D = true; _orbitLastPos = pos; CaptureMouse(); RefreshSolid3DMenu(); return; }
+                var targetSc = FindSolid3DAt(pos) ?? Solid3D;
+                Vec3 p3d;
+                string descPt;
+                if (targetSc != null && targetSc.Kind == "poly")
+                {
+                    var v = FindNearest3DVertex(pos, 18.0);
+                    if (v != null) { p3d = v.Pos; descPt = v.Label; }
+                    else
+                    {
+                        var hitEdge = FindNearest3DEdge(pos, 15.0);
+                        if (hitEdge != null)
+                        {
+                            var (edge, tParam) = hitEdge.Value; var v1 = targetSc.GetV(edge.V1Id)!; var v2 = targetSc.GetV(edge.V2Id)!;
+                            p3d = v1.Pos + (v2.Pos - v1.Pos) * tParam;
+                            var nv = new Vertex3D { Id = $"v3_{targetSc.NextIdx++}", Label = Next3DLabel(), X = p3d.X, Y = p3d.Y, Z = p3d.Z, HostEdgeV1 = edge.V1Id, HostEdgeV2 = edge.V2Id, HostT = tParam };
+                            targetSc.Vertices.Add(nv);
+                            descPt = nv.Label;
+                        }
+                        else
+                        {
+                            p3d = targetSc.ScreenToLocalApprox(pos, (_arbitraryPlanePoints.Count - 1) * 0.35);
+                            descPt = $"M{_arbitraryPlanePoints.Count + 1}";
+                        }
+                    }
+                }
+                else if (targetSc != null)
+                {
+                    p3d = targetSc.ScreenToLocalApprox(pos, (_arbitraryPlanePoints.Count - 1) * 0.35);
+                    descPt = $"M{_arbitraryPlanePoints.Count + 1}";
+                }
+                else
+                {
+                    double cx = ActualWidth > 100 ? ActualWidth * 0.45 : 480;
+                    double cy = ActualHeight > 100 ? ActualHeight * 0.54 : 420;
+                    var tmp = new Solid3DScene { CenterScreen = new Point(cx, cy), Scale = 135.0 };
+                    p3d = tmp.ScreenToLocalApprox(pos, (_arbitraryPlanePoints.Count - 1) * 0.35);
+                    descPt = $"M{_arbitraryPlanePoints.Count + 1}";
+                }
+
+                _arbitraryPlanePoints.Add(p3d);
+                if (_arbitraryPlanePoints.Count < 3)
+                {
+                    ShowToast($"Mp (P) qua 3 điểm bất kỳ: đã chọn {_arbitraryPlanePoints.Count}/3 điểm ({descPt}). Click tiếp điểm thứ {_arbitraryPlanePoints.Count + 1}!");
+                }
+                else
+                {
+                    var pA = _arbitraryPlanePoints[0]; var pB = _arbitraryPlanePoints[1]; var pC = _arbitraryPlanePoints[2];
+                    _arbitraryPlanePoints.Clear();
+                    if (targetSc == null)
+                    {
+                        double cx = ActualWidth > 100 ? ActualWidth * 0.45 : 480;
+                        double cy = ActualHeight > 100 ? ActualHeight * 0.54 : 420;
+                        targetSc = Solid3DScene.CreatePreset("plane_only", new Point(cx, cy));
+                        if (!KeepPreviousSolids3D) Solids3DList.Clear();
+                        Solids3DList.Add(targetSc);
+                    }
+                    var (_, msg) = targetSc.CreatePlaneFromArbitrary3Points(pA, pB, pC, FillColorHex);
+                    SetTool("select");
+                    RefreshSolid3DMenu();
+                    ShowToast(msg, 4800);
+                }
+                InvalidateVisual();
+                return;
+            }
+
+            if (Tool == "intersect_solids_3d")
+            {
+                var hitS = FindSolid3DAt(pos);
+                if (hitS != null)
+                {
+                    if (!_step3DVertices.Contains(hitS.Id)) _step3DVertices.Add(hitS.Id);
+                    if (_step3DVertices.Count == 1)
+                    {
+                        ShowToast($"Đã chọn khối 1: {hitS.Name}. Click chọn khối 2 để tính giao!");
+                    }
+                    else
+                    {
+                        var s1 = Solids3DList.FirstOrDefault(x => x.Id == _step3DVertices[0]) ?? Solid3D;
+                        var s2 = hitS;
+                        _step3DVertices.Clear();
+                        if (s1 != null && s2 != null && s1 != s2)
+                        {
+                            _intersectSolidA = s1;
+                            _intersectSolidB = s2;
+                            var pts = Solid3DScene.ComputeSolidIntersectionPoints(s1, s2);
+                            ShowToast(pts.Count > 0 ? $"✓ Đang bật giao trực tiếp {s1.Name} ∩ {s2.Name} ({pts.Count} điểm giao)!" : "Đã bật theo dõi giao 2 khối — hãy kéo 2 khối chồng lên nhau!", 4500);
+                        }
+                        else ShowToast("Hãy chọn 2 khối 3D khác nhau!");
+                    }
+                }
+                else ShowToast("Click vào 1 khối 3D để chọn giao khối!");
+                InvalidateVisual();
+                return;
+            }
+
+            if (Solid3D != null && Tool is "orbit_3d" or "point_edge_3d" or "edge_3d" or "parallel_3d" or "section_3d" or "plane_para_3d")
+            {
+                if (Tool == "orbit_3d") { _activeOrbitSolid3D = FindSolid3DAt(pos) ?? Solid3D; _isOrbiting3D = true; _orbitLastPos = pos; CaptureMouse(); RefreshSolid3DMenu(); return; }
                 if (Tool == "point_edge_3d")
                 {
                     var hit = FindNearest3DEdge(pos, 16.0);
@@ -1680,37 +2024,7 @@ namespace ScienceWordOverlay
                     }
                     return;
                 }
-                if (Tool == "plane_3pts_3d")
-                {
-                    if (Solid3D.Kind != "poly") { ShowToast("Với Nón/Trụ/Cầu hãy bấm [✂️ Mp cắt] để tạo mặt phẳng cắt tương tác!"); return; }
-                    var v = FindNearest3DVertex(pos, 18.0);
-                    if (v == null)
-                    {
-                        var hit = FindNearest3DEdge(pos, 15.0);
-                        if (hit != null)
-                        {
-                            var (edge, tParam) = hit.Value; var v1 = Solid3D.GetV(edge.V1Id)!; var v2 = Solid3D.GetV(edge.V2Id)!;
-                            Vec3 p3 = v1.Pos + (v2.Pos - v1.Pos) * tParam;
-                            v = new Vertex3D { Id = $"v3_{Solid3D.NextIdx++}", Label = Next3DLabel(), X = p3.X, Y = p3.Y, Z = p3.Z, HostEdgeV1 = edge.V1Id, HostEdgeV2 = edge.V2Id, HostT = tParam };
-                            Solid3D.Vertices.Add(v);
-                        }
-                    }
-                    if (v == null) { ShowToast("Hãy click vào 1 đỉnh hoặc trực tiếp lên cạnh của khối đa diện 3D!"); return; }
-                    if (!_step3DVertices.Contains(v.Id)) _step3DVertices.Add(v.Id);
-                    if (_step3DVertices.Count < 3)
-                    {
-                        ShowToast($"Mp (P) qua 3 điểm: đã chọn {_step3DVertices.Count}/3 điểm ({string.Join(", ", _step3DVertices.Select(id => Solid3D.GetV(id)?.Label))}).");
-                    }
-                    else
-                    {
-                        var (_, msg) = Solid3D.CreatePlaneFrom3Vertices(_step3DVertices[0], _step3DVertices[1], _step3DVertices[2], Next3DLabel, FillColorHex);
-                        _step3DVertices.Clear();
-                        RefreshSolid3DMenu();
-                        ShowToast(msg, 4800);
-                    }
-                    InvalidateVisual();
-                    return;
-                }
+
                 if (Tool == "plane_para_3d")
                 {
                     if (Solid3D.Kind != "poly") { ShowToast("Với Nón/Trụ/Cầu hãy bấm [✂️ Mp cắt] để tạo mặt phẳng cắt tương tác!"); return; }
@@ -1908,7 +2222,23 @@ namespace ScienceWordOverlay
                     _isDraggingGroup = true; _groupLastPos = pos;
                     CaptureMouse(); InvalidateVisual(); RefreshHandwritingMenu(); return;
                 }
-                if (Solid3D != null && GetSolid3DBounds().Contains(pos)) { ClearGroupSelection(); _isMoving3D = true; _orbitLastPos = pos; CaptureMouse(); InvalidateVisual(); RefreshSolid3DMenu(); return; }
+                var hitSolid = FindSolid3DAt(pos);
+                if (hitSolid != null)
+                {
+                    ClearGroupSelection();
+                    Solids3DList.Remove(hitSolid); Solids3DList.Add(hitSolid);
+                    _activeMoveSolid3D = hitSolid;
+                    int partSide = HitTestCutPartSide(hitSolid, pos);
+                    if (partSide != 0 && hitSolid.CutPlane != null)
+                    {
+                        _draggingCutPartSide = partSide;
+                        _orbitLastPos = pos;
+                        CaptureMouse(); InvalidateVisual(); RefreshSolid3DMenu();
+                        ShowToast(partSide > 0 ? "✂️ Đang kéo dời phần TRÊN mặt phẳng cắt (P)!" : "✂️ Đang kéo dời phần DƯỚI mặt phẳng cắt (P)!", 2200);
+                        return;
+                    }
+                    _isMoving3D = true; _orbitLastPos = pos; CaptureMouse(); InvalidateVisual(); RefreshSolid3DMenu(); return;
+                }
 
                 ClearGroupSelection(); ContextMenuRequested?.Invoke("", null);
                 _selectedPointId = null; _selectedShapeId = null;
@@ -2071,15 +2401,23 @@ namespace ScienceWordOverlay
             Point pos = e.GetPosition(this);
             _mousePos = pos;
 
-            if (_isMoving3D && Solid3D != null)
+            if (_draggingCutPartSide != 0 && (_activeMoveSolid3D ?? Solid3D) != null)
             {
-                Solid3D.CenterScreen = new Point(Solid3D.CenterScreen.X + (pos.X - _orbitLastPos.X), Solid3D.CenterScreen.Y + (pos.Y - _orbitLastPos.Y));
+                var sc = _activeMoveSolid3D ?? Solid3D!;
+                sc.NudgePartByScreenDelta(_draggingCutPartSide, pos.X - _orbitLastPos.X, pos.Y - _orbitLastPos.Y);
+                _orbitLastPos = pos; InvalidateVisual(); return;
+            }
+            if (_isMoving3D && (_activeMoveSolid3D ?? Solid3D) != null)
+            {
+                var sc = _activeMoveSolid3D ?? Solid3D!;
+                sc.CenterScreen = new Point(sc.CenterScreen.X + (pos.X - _orbitLastPos.X), sc.CenterScreen.Y + (pos.Y - _orbitLastPos.Y));
                 _orbitLastPos = pos; InvalidateVisual(); RefreshSolid3DMenu(); return;
             }
-            if (_isOrbiting3D && Solid3D != null)
+            if (_isOrbiting3D && (_activeOrbitSolid3D ?? Solid3D) != null)
             {
-                Solid3D.YawDeg += (pos.X - _orbitLastPos.X) * 0.55;
-                Solid3D.PitchDeg = Math.Clamp(Solid3D.PitchDeg + (pos.Y - _orbitLastPos.Y) * 0.45, -75, 75);
+                var sc = _activeOrbitSolid3D ?? Solid3D!;
+                sc.YawDeg += (pos.X - _orbitLastPos.X) * 0.55;
+                sc.PitchDeg = Math.Clamp(sc.PitchDeg + (pos.Y - _orbitLastPos.Y) * 0.45, -75, 75);
                 _orbitLastPos = pos; InvalidateVisual(); return;
             }
             if (_isOrbitingRev3D && RevScene != null && RevScene.IsValid)
@@ -2198,6 +2536,7 @@ namespace ScienceWordOverlay
             if (wasDraggingGroup) RefreshActiveSelectionMenu();
             _dragRevRegionIdx = -1;
             _isOrbiting3D = false; _isMoving3D = false; _isOrbitingRev3D = false;
+            _draggingCutPartSide = 0; _activeOrbitSolid3D = null; _activeMoveSolid3D = null;
             _draggingPointId = null; _draggingTextId = null; _draggingMathId = null; _activeStroke = null;
             if (IsMouseCaptured) ReleaseMouseCapture();
         }
@@ -2243,6 +2582,19 @@ namespace ScienceWordOverlay
                 Scene.Regions.RemoveAll(r => r.PointIds.Contains(pid)); Scene.Markers.RemoveAll(m => m.P1Id == pid || m.VertexId == pid || m.P2Id == pid);
                 _selectedPointId = null; InvalidateVisual(); ShowToast("Đã xóa điểm và các cạnh liên quan");
             }
+            else if (Solids3DList.Count > 0)
+            {
+                DeleteSolid3D();
+            }
+            else if (RevScene != null)
+            {
+                SetSpinAxis3D(SpinAxisMode.None);
+                RevScene = null;
+                NotifyMetrics();
+                ContextMenuRequested?.Invoke("", null);
+                InvalidateVisual();
+                ShowToast("Đã xóa miền tích phân / khối tròn xoay");
+            }
         }
 
         private bool EraseStrokesNear(Point pos)
@@ -2266,20 +2618,24 @@ namespace ScienceWordOverlay
                 (byte)Math.Clamp(c.B * factor, 0, 255));
         }
 
+        private static SolidColorBrush FrozenBrush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
         private static Brush MakeRegionBrush(string hex, double opacity, string pattern)
         {
             Color c = ParseColor(hex, opacity);
-            if (pattern == "solid") return new SolidColorBrush(c);
+            if (pattern == "solid") return FrozenBrush(c);
             var group = new DrawingGroup();
-            if (pattern == "hatch") group.Children.Add(new GeometryDrawing(null, new Pen(new SolidColorBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.35))), 1.5), new LineGeometry(new Point(0, 10), new Point(10, 0))));
-            else if (pattern == "cross") { var pen = new Pen(new SolidColorBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.35))), 1.3); group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new Point(0, 10), new Point(10, 0)))); group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new Point(0, 0), new Point(10, 10)))); }
-            else if (pattern == "dots") group.Children.Add(new GeometryDrawing(new SolidColorBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.40))), null, new EllipseGeometry(new Point(5, 5), 1.8, 1.8)));
-            return new DrawingBrush(group) { TileMode = TileMode.Tile, Viewport = new Rect(0, 0, 10, 10), ViewportUnits = BrushMappingMode.Absolute };
+            if (pattern == "hatch") group.Children.Add(new GeometryDrawing(null, new Pen(FrozenBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.35))), 1.5), new LineGeometry(new Point(0, 10), new Point(10, 0))));
+            else if (pattern == "cross") { var pen = new Pen(FrozenBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.35))), 1.3); group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new Point(0, 10), new Point(10, 0)))); group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new Point(0, 0), new Point(10, 10)))); }
+            else if (pattern == "dots") group.Children.Add(new GeometryDrawing(FrozenBrush(ParseColor(hex, Math.Min(1.0, opacity + 0.40))), null, new EllipseGeometry(new Point(5, 5), 1.8, 1.8)));
+            var db = new DrawingBrush(group) { TileMode = TileMode.Tile, Viewport = new Rect(0, 0, 10, 10), ViewportUnits = BrushMappingMode.Absolute };
+            db.Freeze();
+            return db;
         }
 
         private static Pen MakePen(string hex, double width, string dash, bool highlight = false)
         {
-            var pen = new Pen(new SolidColorBrush(highlight ? ParseColor("#2563EB") : ParseColor(hex)), width + (highlight ? 1.4 : 0.0))
+            var pen = new Pen(FrozenBrush(highlight ? ParseColor("#2563EB") : ParseColor(hex)), width + (highlight ? 1.4 : 0.0))
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round,
@@ -2288,6 +2644,7 @@ namespace ScienceWordOverlay
             };
             if (dash == "dashed") pen.DashStyle = new DashStyle(new double[] { 5.0, 4.2 }, 0);
             else if (dash == "dotted") pen.DashStyle = DashStyles.Dot;
+            pen.Freeze();
             return pen;
         }
 
@@ -2300,7 +2657,7 @@ namespace ScienceWordOverlay
             if (!string.IsNullOrEmpty(_toastMsg))
             {
                 var ft = new FormattedText(_toastMsg, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal), 13, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+                    TfUiSemiBold, 13, Brushes.White, VisualTreeHelper.GetDpi(this).PixelsPerDip);
                 double tw = ft.Width + 34, th = 34;
                 var rect = new Rect((ActualWidth - tw) / 2.0, ActualHeight - 64, tw, th);
                 dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(230, 15, 23, 42)), new Pen(new SolidColorBrush(Color.FromArgb(190, 96, 165, 250)), 1.2), rect, 17, 17);
@@ -2319,8 +2676,46 @@ namespace ScienceWordOverlay
             if (RevScene != null && RevScene.IsValid)
                 RenderRevolutionScene(dc, RevScene, cleanExport, dpi);
 
-            // 0.45 Khối 3D thực (Nón/Trụ/Cầu nét đứt chuẩn + Chóp/Lăng trụ)
-            if (Solid3D != null) RenderSolid3D(dc, Solid3D, cleanExport, dpi);
+            // 0.43 Hệ tọa độ không gian Oxyz (khi bật sẽ hiển thị cả lúc xuất/chèn ảnh!)
+            if (ShowCoordSystem3D) RenderSpatialCoordinateSystem3D(dc, dpi);
+
+            // 0.45 Các khối 3D & Mặt phẳng (Nón/Trụ/Cầu nét đứt chuẩn + Chóp/Lăng trụ + Khai triển Net GeoGebra)
+            foreach (var sc3 in Solids3DList)
+                RenderSolid3D(dc, sc3, cleanExport, dpi);
+
+            // 0.46 Giao trực tiếp giữa 2 khối 3D (tự cập nhật khi kéo/xoay 1 trong 2 khối)
+            if (_intersectSolidA != null && _intersectSolidB != null && Solids3DList.Contains(_intersectSolidA) && Solids3DList.Contains(_intersectSolidB))
+            {
+                var liveInterPts = Solid3DScene.ComputeSolidIntersectionPoints(_intersectSolidA, _intersectSolidB);
+                if (liveInterPts.Count > 0)
+                {
+                    var interPts2d = liveInterPts.Select(p => _intersectSolidA.Project(p, out _)).ToList();
+                    if (interPts2d.Count >= 2)
+                    {
+                        var gInt = new StreamGeometry();
+                        using (var ctx = gInt.Open()) { ctx.BeginFigure(interPts2d[0], true, interPts2d.Count >= 3); ctx.PolyLineTo(interPts2d.Skip(1).ToList(), true, false); }
+                        gInt.Freeze();
+                        dc.DrawGeometry(FrozenBrush(Color.FromArgb(72, 239, 68, 68)), new Pen(FrozenBrush(Color.FromRgb(220, 38, 38)), 2.4), gInt);
+                    }
+                    foreach (var ip in interPts2d)
+                        dc.DrawEllipse(FrozenBrush(Color.FromRgb(239, 68, 68)), new Pen(Brushes.White, 1.4), ip, 4.2, 4.2);
+                }
+            }
+
+            // 0.47 Đang chọn điểm dựng mặt phẳng (P) tự do (hiện rõ kể cả khi chưa có khối 3D nào!)
+            if (!cleanExport && _arbitraryPlanePoints.Count > 0)
+            {
+                var refProj = Solid3D ?? GetDefault3DReferenceScene();
+                var p2d = _arbitraryPlanePoints.Select(p => refProj.Project(p, out _)).ToList();
+                var prevPen = new Pen(FrozenBrush(Color.FromRgb(2, 132, 199)), 1.8) { DashStyle = DashStyles.Dash };
+                for (int i = 0; i < p2d.Count; i++)
+                {
+                    if (i > 0) dc.DrawLine(prevPen, p2d[i - 1], p2d[i]);
+                    dc.DrawEllipse(FrozenBrush(Color.FromRgb(2, 132, 199)), new Pen(Brushes.White, 1.5), p2d[i], 5.0, 5.0);
+                    var ftP = new FormattedText($"M{i + 1}", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, TfUiBold, 12, FrozenBrush(Color.FromRgb(2, 132, 199)), dpi);
+                    dc.DrawText(ftP, new Point(p2d[i].X + 8, p2d[i].Y - 14));
+                }
+            }
 
             // 0.5 Khung nhận diện đối tượng Office (ẩn khi export hoặc khi người dùng chọn ẩn nút cận)
             if (!cleanExport && OfficeContext != null && OfficeContext.ScreenBoundsDip.Width > 2 && (RevScene == null || RevShowBoundsHandles))
@@ -2717,9 +3112,23 @@ namespace ScienceWordOverlay
                 dc.DrawText(ft, new Point(pt.X + 8, pt.Y - 18));
             }
 
+            if (s.Kind == "plane_only")
+            {
+                if (s.CutPlane != null && s.CutPlane.Visible)
+                    DrawCutPlaneSheet3D(dc, s, s.CutPlane, lblTf, dpi);
+                return;
+            }
+
+            if (s.IsNetUnfolded)
+            {
+                RenderNetUnfolded3D(dc, s, cleanExport, solidPen, baseSolidCol, lightDir, lblTf, lblCol, dpi);
+                return;
+            }
+
             if (s.Kind == "sphere")
             {
-                Point cPt = s.Project(new Vec3(0, 0, 0), out _);
+                Vec3 offSph = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, 0, 0)));
+                Point cPt = s.Project(offSph, out _);
                 double rPx = s.Radius * s.Scale;
 
                 if (s.IsSolidShaded)
@@ -2741,7 +3150,7 @@ namespace ScienceWordOverlay
                 for (int i = 0; i < n; i++)
                 {
                     double t0 = 2 * Math.PI * i / n, tm = 2 * Math.PI * (i + 0.5) / n;
-                    eqPts[i] = s.Project(new Vec3(s.Radius * Math.Cos(t0), 0, s.Radius * Math.Sin(t0)), out _);
+                    eqPts[i] = s.Project(offSph + new Vec3(s.Radius * Math.Cos(t0), 0, s.Radius * Math.Sin(t0)), out _);
                     eqVis[i] = s.RotatePoint(new Vec3(s.Radius * Math.Cos(tm), 0, s.Radius * Math.Sin(tm))).Z >= 0.0;
                 }
                 DrawClosedCurveWithVisibility(dc, eqPts, eqVis, solidPen, dashedPen);
@@ -2761,7 +3170,9 @@ namespace ScienceWordOverlay
                 bool isCone = s.Kind == "cone";
                 int n = 96;
                 double R = s.Radius, h2 = s.Height * 0.5;
-                Vec3 pBotC = new(0, -h2, 0), pTopC = new(0, h2, 0);
+                Vec3 offBot = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, -h2, 0)));
+                Vec3 offTop = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, h2, 0)));
+                Vec3 pBotC = new(0, -h2, 0) + offBot, pTopC = new(0, h2, 0) + offTop;
                 Point ptBotC = s.Project(pBotC, out double zBotC), ptTopC = s.Project(pTopC, out double zTopC);
 
                 Point[] botPts = new Point[n], topPts = new Point[n];
@@ -2771,8 +3182,13 @@ namespace ScienceWordOverlay
                 for (int i = 0; i < n; i++)
                 {
                     double th = 2 * Math.PI * i / n, tm = 2 * Math.PI * (i + 0.5) / n;
-                    botPts[i] = s.Project(new Vec3(R * Math.Cos(th), -h2, R * Math.Sin(th)), out botZ[i]);
-                    if (!isCone) topPts[i] = s.Project(new Vec3(R * Math.Cos(th), h2, R * Math.Sin(th)), out topZ[i]);
+                    Vec3 pb3 = new(R * Math.Cos(th), -h2, R * Math.Sin(th));
+                    botPts[i] = s.Project(pb3 + s.GetPartOffset(s.GetPartSideSign(pb3)), out botZ[i]);
+                    if (!isCone)
+                    {
+                        Vec3 pt3 = new(R * Math.Cos(th), h2, R * Math.Sin(th));
+                        topPts[i] = s.Project(pt3 + s.GetPartOffset(s.GetPartSideSign(pt3)), out topZ[i]);
+                    }
 
                     Vec3 rad = new(Math.Cos(tm), 0, Math.Sin(tm));
                     if (isCone)
@@ -2832,7 +3248,10 @@ namespace ScienceWordOverlay
                         {
                             double phi = Math.Atan2(vCam.Z, vCam.X), delta = Math.Acos(rhs);
                             foreach (double th in new[] { phi + delta, phi - delta })
-                                dc.DrawLine(solidPen, ptTopC, s.Project(new Vec3(R * Math.Cos(th), -h2, R * Math.Sin(th)), out _));
+                            {
+                                Vec3 pb = new(R * Math.Cos(th), -h2, R * Math.Sin(th));
+                                dc.DrawLine(solidPen, ptTopC, s.Project(pb + s.GetPartOffset(s.GetPartSideSign(pb)), out _));
+                            }
                         }
                     }
                     else
@@ -2841,7 +3260,8 @@ namespace ScienceWordOverlay
                         foreach (double th in new[] { th1, th1 + Math.PI })
                         {
                             double x = R * Math.Cos(th), z = R * Math.Sin(th);
-                            dc.DrawLine(solidPen, s.Project(new Vec3(x, -h2, z), out _), s.Project(new Vec3(x, h2, z), out _));
+                            Vec3 pb = new(x, -h2, z), pt = new(x, h2, z);
+                            dc.DrawLine(solidPen, s.Project(pb + s.GetPartOffset(s.GetPartSideSign(pb)), out _), s.Project(pt + s.GetPartOffset(s.GetPartSideSign(pt)), out _));
                         }
                     }
                 }
@@ -2854,6 +3274,53 @@ namespace ScienceWordOverlay
             }
 
             // Da dien 3D (Chop, Tu dien, Lap phuong, Hop CN, Lang tru)
+            // Khi da cat tach khoi bang mat phang (P) -> dung Sutherland-Hodgman cat thuc thanh 2 nua khep kin + nap thiet dien o ca 2 nua!
+            if (s.HasActiveSplit)
+            {
+                if (s.CutPlane != null && s.CutPlane.Visible)
+                    DrawCutPlaneSheet3D(dc, s, s.CutPlane, lblTf, dpi);
+
+                var splitPolys = s.ComputeSplitPolyHalves3D();
+                var drawList = new List<(Point[] pts, double depth, Color fillCol, Pen edgePen, bool isCap)>();
+                Color upperCol = ParseColor(s.SolidColorHex, 1.0);
+                Color lowerCol = ParseColor("#34D399", 1.0);
+                Color capCol = ParseColor(s.CutPlane?.SectionColorHex ?? "#FACC15", 1.0);
+                var capBorderPen = MakePen("#D97706", Math.Max(1.8, StrokeWidth * 0.9), "solid", false);
+
+                foreach (var (pts3d, outwardN, partSide, isCap) in splitPolys)
+                {
+                    if (pts3d.Count < 3) continue;
+                    var pts2d = new Point[pts3d.Count];
+                    double sumZ = 0;
+                    for (int i = 0; i < pts3d.Count; i++) { pts2d[i] = s.Project(pts3d[i], out double z); sumZ += z; }
+                    double light = Math.Clamp(0.50 + 0.50 * Math.Max(-0.2, Vec3.Dot(s.RotatePoint(outwardN), lightDir)), 0.32, 1.22);
+                    Color baseC = isCap ? capCol : (partSide > 0 ? upperCol : lowerCol);
+                    double op = isCap ? 0.72 : (s.IsSolidShaded ? Math.Max(0.45, s.SolidOpacity * 0.92) : 0.22);
+                    bool frontFacing = s.RotatePoint(outwardN).Z >= -0.05;
+                    Pen ep = isCap ? capBorderPen : (frontFacing ? solidPen : dashedPen);
+                    drawList.Add((pts2d, sumZ / pts3d.Count, ShadeColor(baseC, light, op), ep, isCap));
+                }
+
+                drawList.Sort((a, b) => a.depth.CompareTo(b.depth));
+                foreach (var q in drawList)
+                {
+                    var g = new StreamGeometry();
+                    using (var ctx = g.Open()) { ctx.BeginFigure(q.pts[0], true, true); ctx.PolyLineTo(q.pts.Skip(1).ToList(), true, false); }
+                    g.Freeze();
+                    dc.DrawGeometry(FrozenBrush(q.fillCol), q.edgePen, g);
+                }
+
+                foreach (var v in s.Vertices)
+                {
+                    if (string.IsNullOrEmpty(v.Label)) continue;
+                    Point pv = s.Project(s.GetEffectivePos(v, true), out _);
+                    dc.DrawEllipse(FrozenBrush(Color.FromRgb(239, 68, 68)), new Pen(Brushes.White, 1.3), pv, 3.4, 3.4);
+                    var ft = new FormattedText(v.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 18, FrozenBrush(lblCol), dpi);
+                    dc.DrawText(ft, new Point(pv.X + 7, pv.Y - 17));
+                }
+                return;
+            }
+
             var proj = new Dictionary<string, (Point pt, double z)>();
             foreach (var v in s.Vertices) { Point p = s.Project(s.GetEffectivePos(v, true), out double z); proj[v.Id] = (p, z); }
 
@@ -2913,6 +3380,121 @@ namespace ScienceWordOverlay
                 var ft = new FormattedText(v.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 19, new SolidColorBrush(lblCol), dpi);
                 dc.DrawText(ft, new Point(pv.pt.X + 8, pv.pt.Y - 18));
             }
+        }
+
+        private void RenderNetUnfolded3D(DrawingContext dc, Solid3DScene s, bool cleanExport, Pen borderPen, Color baseCol, Vec3 lightDir, Typeface lblTf, Color lblCol, double dpi)
+        {
+            var netFaces = s.ComputeNetFacePolygons3D();
+            if (netFaces.Count == 0) return;
+
+            var rendered = new List<(Point[] pts, double depth, Color fillCol, string label, bool isBase, bool isTopCap)>();
+            foreach (var (pts3d, label, isBase, isTopCap) in netFaces)
+            {
+                if (pts3d.Count < 3) continue;
+                var pts2d = new Point[pts3d.Count];
+                double sumZ = 0;
+                for (int i = 0; i < pts3d.Count; i++)
+                {
+                    pts2d[i] = s.Project(pts3d[i], out double z);
+                    sumZ += z;
+                }
+                Vec3 n = Vec3.Cross(pts3d[1] - pts3d[0], pts3d[2] - pts3d[0]).Normalized();
+                double light = Math.Clamp(0.55 + 0.45 * Math.Abs(Vec3.Dot(s.RotatePoint(n), lightDir)), 0.35, 1.2);
+                Color c = isBase ? ParseColor("#F59E0B", 0.58) : (isTopCap ? ParseColor("#10B981", 0.55) : ShadeColor(baseCol, light, 0.52));
+                rendered.Add((pts2d, sumZ / pts3d.Count, c, label, isBase, isTopCap));
+            }
+
+            rendered.Sort((a, b) => a.depth.CompareTo(b.depth));
+            var netBorderPen = new Pen(new SolidColorBrush(Color.FromRgb(29, 78, 216)), Math.Max(1.6, StrokeWidth * 0.85)) { LineJoin = PenLineJoin.Round };
+
+            foreach (var item in rendered)
+            {
+                var g = new StreamGeometry();
+                using (var ctx = g.Open())
+                {
+                    ctx.BeginFigure(item.pts[0], true, true);
+                    ctx.PolyLineTo(item.pts.Skip(1).ToList(), true, false);
+                }
+                g.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(item.fillCol), netBorderPen, g);
+
+                if (s.Kind == "poly")
+                {
+                    foreach (var p in item.pts)
+                        dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(239, 68, 68)), new Pen(Brushes.White, 1.2), p, 3.2, 3.2);
+                }
+                if (!cleanExport && s.UnfoldProgress > 0.35 && !string.IsNullOrEmpty(item.label))
+                {
+                    double cx = item.pts.Average(p => p.X), cy = item.pts.Average(p => p.Y);
+                    var ft = new FormattedText(item.label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                        new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal),
+                        11.5, new SolidColorBrush(lblCol), dpi);
+                    dc.DrawText(ft, new Point(cx - ft.Width * 0.5, cy - ft.Height * 0.5));
+                }
+            }
+
+            if (!cleanExport)
+            {
+                Point topP = new(s.CenterScreen.X, s.CenterScreen.Y - s.Scale * 1.45);
+                var ftHud = new FormattedText($"📦 Khai triển Net: {s.UnfoldProgress * 100.0:0}%", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal),
+                    12, new SolidColorBrush(Color.FromRgb(180, 83, 9)), dpi);
+                dc.DrawText(ftHud, new Point(topP.X - ftHud.Width * 0.5, topP.Y));
+            }
+        }
+
+        private Solid3DScene GetDefault3DReferenceScene() => new()
+        {
+            CenterScreen = new Point(ActualWidth > 100 ? ActualWidth * 0.48 : 480, ActualHeight > 100 ? ActualHeight * 0.55 : 430),
+            Scale = 135.0,
+            YawDeg = -28.0,
+            PitchDeg = 22.0
+        };
+
+        private void RenderSpatialCoordinateSystem3D(DrawingContext dc, double dpi)
+        {
+            var refSc = Solid3D ?? GetDefault3DReferenceScene();
+
+            var gridPen = new Pen(new SolidColorBrush(Color.FromArgb(65, 100, 116, 139)), 0.85);
+            for (int i = -2; i <= 2; i++)
+            {
+                double off = i * 0.65;
+                dc.DrawLine(gridPen, refSc.Project(new Vec3(-1.3, 0, off), out _), refSc.Project(new Vec3(1.3, 0, off), out _));
+                dc.DrawLine(gridPen, refSc.Project(new Vec3(off, 0, -1.3), out _), refSc.Project(new Vec3(off, 0, 1.3), out _));
+            }
+
+            Point pO = refSc.Project(new Vec3(0, 0, 0), out _);
+            Point pX = refSc.Project(new Vec3(1.65, 0, 0), out _);
+            Point pY = refSc.Project(new Vec3(0, 0, 1.65), out _);
+            Point pZ = refSc.Project(new Vec3(0, 1.65, 0), out _);
+
+            void DrawAxisArrow(Point from, Point to, Color col, string name)
+            {
+                var pen = new Pen(new SolidColorBrush(col), 2.1) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                dc.DrawLine(pen, from, to);
+                double ang = Math.Atan2(to.Y - from.Y, to.X - from.X);
+                var g = new StreamGeometry();
+                using (var ctx = g.Open())
+                {
+                    ctx.BeginFigure(to, true, true);
+                    ctx.LineTo(new Point(to.X - 10 * Math.Cos(ang - 0.4), to.Y - 10 * Math.Sin(ang - 0.4)), true, false);
+                    ctx.LineTo(new Point(to.X - 10 * Math.Cos(ang + 0.4), to.Y - 10 * Math.Sin(ang + 0.4)), true, false);
+                }
+                g.Freeze();
+                dc.DrawGeometry(new SolidColorBrush(col), null, g);
+                var ft = new FormattedText(name, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal),
+                    17, new SolidColorBrush(col), dpi);
+                dc.DrawText(ft, new Point(to.X + 6, to.Y - 10));
+            }
+
+            DrawAxisArrow(pO, pX, Color.FromRgb(220, 38, 38), "x");
+            DrawAxisArrow(pO, pY, Color.FromRgb(5, 150, 105), "y");
+            DrawAxisArrow(pO, pZ, Color.FromRgb(37, 99, 235), "z");
+            var ftO = new FormattedText("O", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal),
+                16, new SolidColorBrush(Color.FromRgb(15, 23, 42)), dpi);
+            dc.DrawText(ftO, new Point(pO.X - 14, pO.Y + 4));
         }
 
         private static void DrawCutPlaneSheet3D(DrawingContext dc, Solid3DScene s, CutPlane3D plane, Typeface lblTf, double dpi)
@@ -3513,7 +4095,16 @@ namespace ScienceWordOverlay
                     }
                 }
             }
-            if (Solid3D != null) { var sb = GetSolid3DBounds(); if (!sb.IsEmpty) { xs.Add(sb.Left); xs.Add(sb.Right); ys.Add(sb.Top); ys.Add(sb.Bottom); } }
+            if (ShowCoordSystem3D)
+            {
+                var refSc = Solid3D ?? GetDefault3DReferenceScene();
+                foreach (var axPt in new[] { new Vec3(0, 0, 0), new Vec3(1.75, 0, 0), new Vec3(0, 0, 1.75), new Vec3(0, 1.75, 0), new Vec3(-1.3, 0, -1.3) })
+                {
+                    Point ap = refSc.Project(axPt, out _);
+                    xs.Add(ap.X); ys.Add(ap.Y);
+                }
+            }
+            foreach (var sc3 in Solids3DList) { var sb = GetSolid3DBoundsFor(sc3); if (!sb.IsEmpty) { xs.Add(sb.Left); xs.Add(sb.Right); ys.Add(sb.Top); ys.Add(sb.Bottom); } }
             foreach (var mf in MagicFills) { xs.Add(mf.BoundsDip.Left); xs.Add(mf.BoundsDip.Right); ys.Add(mf.BoundsDip.Top); ys.Add(mf.BoundsDip.Bottom); }
             foreach (var p in Scene.Points)
             {

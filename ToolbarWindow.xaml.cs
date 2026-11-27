@@ -81,6 +81,11 @@ namespace ScienceWordOverlay
                 if (ChkRevHandles != null && ChkRevHandles.IsChecked != visible)
                     ChkRevHandles.IsChecked = visible;
             };
+            _overlay.Surface.NetProgressUpdated += pct =>
+            {
+                if (SlNet3D != null && Math.Abs(SlNet3D.Value - pct) > 0.5)
+                    SlNet3D.Value = pct;
+            };
 
             _appPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
             _appPollTimer.Tick += OnPollForegroundApp; _appPollTimer.Start();
@@ -228,6 +233,18 @@ namespace ScienceWordOverlay
             void AddSolid(string header, string presetKey) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SpawnInteractiveSolid3D(presetKey); SlSplit3D.Value = 0; }; menu.Items.Add(mi); }
             void Add3DTool(string header, string tag, string shortName) { var mi = new MenuItem { Header = header }; mi.Click += (_, _) => ActivateTool(tag, shortName); menu.Items.Add(mi); }
 
+            var miKeep = new MenuItem
+            {
+                Header = _overlay.Surface.KeepPreviousSolids3D ? "📌 Giữ khối cũ khi chọn khối mới: BẬT (Click để tắt)" : "📌 Giữ khối cũ khi chọn khối mới: TẮT (Click để bật)",
+                IsCheckable = true,
+                IsChecked = _overlay.Surface.KeepPreviousSolids3D
+            };
+            miKeep.Click += (_, _) => { _overlay.Surface.KeepPreviousSolids3D = !_overlay.Surface.KeepPreviousSolids3D; _overlay.Surface.ShowToast(_overlay.Surface.KeepPreviousSolids3D ? "Đã bật GIỮ khối 3D cũ khi tạo khối mới" : "Đã bật THAY thế khối 3D cũ khi tạo khối mới"); };
+            menu.Items.Add(miKeep);
+            var miClearAll3D = new MenuItem { Header = "🧹 Xóa sạch mọi khối 3D trên màn hình" };
+            miClearAll3D.Click += (_, _) => _overlay.Surface.ClearAllSolids3D();
+            menu.Items.Add(miClearAll3D);
+            menu.Items.Add(new Separator());
             AddSolid("🍦 Hình nón 3D (Nét đứt chuẩn + Khối đặc)", "cone");
             AddSolid("🥫 Hình trụ 3D (Nét đứt chuẩn + Khối đặc)", "cylinder");
             AddSolid("🔮 Hình cầu 3D (Nét đứt chuẩn + Khối đặc)", "sphere");
@@ -252,11 +269,21 @@ namespace ScienceWordOverlay
             Add3DTool("∥ Dựng song song 3D (MN // AB)", "parallel_3d", "Song song 3D");
             Add3DTool("🔶 Tô Thiết diện 3D (chọn các đỉnh)", "section_3d", "Thiết diện 3D");
             menu.Items.Add(new Separator());
-            Add3DTool("▱ Mp qua 3 điểm (tự dựng thiết diện)", "plane_3pts_3d", "Mp qua 3 điểm");
+            Add3DTool("▱ Mp qua 3 điểm bất kỳ (kể cả ngoài khối)", "plane_3pts_3d", "Mp 3đ bất kỳ");
+            AddSolid("▱ Mặt phẳng (P) độc lập (3 điểm tự do)", "plane_only");
             Add3DTool("▱ Mp qua 1 điểm // mặt (tự dựng thiết diện)", "plane_para_3d", "Mp 1đ // mặt");
             var miCutPlane = new MenuItem { Header = "✂️ Mp cắt tương tác (Nón / Trụ / Cầu / Đa diện)" };
             miCutPlane.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.SpawnInteractiveCutPlane3D(); };
             menu.Items.Add(miCutPlane);
+            var miIntersectSolids = new MenuItem { Header = "⋈ Giao của 2 khối 3D (tính & tô điểm giao)" };
+            miIntersectSolids.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.IntersectActiveSolids3D(); };
+            menu.Items.Add(miIntersectSolids);
+            var miNetUnfold = new MenuItem { Header = (_overlay.Surface.Solid3D?.IsNetUnfolded == true) ? "📦 Gấp lại khối 3D (Đóng Net)" : "📦 Net — Khai triển trải phẳng khối 3D (GeoGebra)" };
+            miNetUnfold.Click += (_, _) => { if (BtnPassthrough.IsChecked == true) BtnPassthrough.IsChecked = false; _overlay.Surface.ToggleNetUnfold3D(); };
+            menu.Items.Add(miNetUnfold);
+            var miToggleOxyz = new MenuItem { Header = _overlay.Surface.ShowCoordSystem3D ? "🌐 Ẩn Hệ tọa độ không gian Oxyz" : "🌐 Hiện Hệ tọa độ không gian Oxyz" };
+            miToggleOxyz.Click += (_, _) => _overlay.Surface.ToggleCoordSystem3D();
+            menu.Items.Add(miToggleOxyz);
             menu.Items.Add(new Separator());
             var miShowRev = new MenuItem { Header = "📊 Bật thanh Tích phân S & Quay tròn xoay V (Word)" };
             miShowRev.Click += (_, _) => { Row3Panel.Visibility = Visibility.Visible; _overlay.Surface.SyncFromOffice(); };
@@ -307,6 +334,9 @@ namespace ScienceWordOverlay
         private void CbPattern_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (_overlay != null && CbPattern.SelectedItem is ComboBoxItem item && item.Tag is string pat) { _overlay.Surface.FillPattern = pat; _overlay.Surface.InvalidateVisual(); } }
         private void SlOpacity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay == null) return; double v = e.NewValue / 100.0; _overlay.Surface.FillOpacity = v; if (_overlay.Surface.Solid3D != null) _overlay.Surface.Solid3D.SolidOpacity = v; _overlay.Surface.InvalidateVisual(); }
         private void BtnToggleShaded3D_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ToggleSolid3DShaded();
+        private void BtnToggleNet3D_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ToggleNetUnfold3D();
+        private void SlNet3D_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_overlay != null) _overlay.Surface.SetNetUnfoldProgress3D(e.NewValue); }
+        private void BtnToggleOxyz3D_Click(object sender, RoutedEventArgs e) => _overlay.Surface.ToggleCoordSystem3D();
 
         private void BtnAutoSpin3D_Click(object sender, RoutedEventArgs e)
         {
@@ -379,6 +409,6 @@ namespace ScienceWordOverlay
         private void BtnRevSwap_Click(object sender, RoutedEventArgs e) { if (_overlay.Surface.RevScene != null && _overlay.Surface.RevScene.SwapAxisAndCurve()) { _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); _overlay.Surface.ShowToast("Đã đổi trục quay & đường cong sinh!"); } }
         private void BtnRevClear_Click(object sender, RoutedEventArgs e) { _overlay.Surface.RevScene = null; Row3Panel.Visibility = Visibility.Collapsed; _overlay.Surface.NotifyMetrics(); _overlay.Surface.InvalidateVisual(); }
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _overlay.Surface.SetSpinAxis3D(SpinAxisMode.None); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); if (_textMathWin != null) { _textMathWin.AllowRealClose = true; _textMathWin.Close(); } Application.Current.Shutdown(); }
+        private void BtnClose_Click(object sender, RoutedEventArgs e) { _appPollTimer.Stop(); _revAnimTimer.Stop(); _overlay.Surface.StopAllTimers(); _dblClickDelayTimer.Stop(); _dblClickHook.Dispose(); if (_textMathWin != null) { _textMathWin.AllowRealClose = true; _textMathWin.Close(); } Application.Current.Shutdown(); }
     }
 }
