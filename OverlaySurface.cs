@@ -3172,7 +3172,7 @@ namespace ScienceWordOverlay
                 double R = s.Radius, h2 = s.Height * 0.5;
                 Vec3 offBot = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, -h2, 0)));
                 Vec3 offTop = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, h2, 0)));
-                Vec3 pBotC = new(0, -h2, 0) + offBot, pTopC = new(0, h2, 0) + offTop;
+                Vec3 pBotC = new Vec3(0, -h2, 0) + offBot, pTopC = new Vec3(0, h2, 0) + offTop;
                 Point ptBotC = s.Project(pBotC, out double zBotC), ptTopC = s.Project(pTopC, out double zTopC);
 
                 Point[] botPts = new Point[n], topPts = new Point[n];
