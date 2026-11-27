@@ -117,6 +117,57 @@ namespace ScienceWordOverlay.Models
         public List<bool> EdgeVisible { get; set; } = new();
     }
 
+    public class CsgNamedVert
+    {
+        public string Label { get; set; } = "";
+        public Vec3 Pos { get; set; }
+    }
+
+    public class CsgFace3D
+    {
+        public List<Vec3> Verts { get; set; } = new();
+        public Vec3 Normal { get; set; }
+        public double Area { get; set; }
+        public bool Smooth { get; set; }
+        public bool IsCap { get; set; }
+        public bool IsCutCap { get; set; }
+        public int SourceId { get; set; } // 0 = Solid A, 1 = Solid B / Clip plane
+    }
+
+    public class CsgEdge3D
+    {
+        public Vec3 A { get; set; }
+        public Vec3 B { get; set; }
+        public List<int> FaceIndices { get; set; } = new();
+    }
+
+    public class CsgSolidMesh
+    {
+        public List<CsgFace3D> Faces { get; set; } = new();
+        public List<CsgEdge3D> Edges { get; set; } = new();
+        public List<CsgNamedVert> NamedVerts { get; set; } = new();
+        public List<CsgNamedVert> CapVerts { get; set; } = new();
+    }
+
+    public class CsgIntersectionResult
+    {
+        public CsgSolidMesh MeshA { get; set; } = new();
+        public CsgSolidMesh MeshBInA { get; set; } = new();
+        public CsgSolidMesh? IntersectionMesh { get; set; }
+        public double VolA { get; set; }
+        public double VolB { get; set; }
+        public double VolI { get; set; }
+    }
+
+    public class CsgCutHalvesResult
+    {
+        public CsgSolidMesh? Upper { get; set; }
+        public CsgSolidMesh? Lower { get; set; }
+        public double SectionArea { get; set; }
+        public double VolUpper { get; set; }
+        public double VolLower { get; set; }
+    }
+
     public class Solid3DScene
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
@@ -183,6 +234,16 @@ namespace ScienceWordOverlay.Models
             double y1 = p.Y;
             double z1 = -p.X * Math.Sin(ry) + p.Z * Math.Cos(ry);
             return new Vec3(x1, y1 * Math.Cos(rx) - z1 * Math.Sin(rx), y1 * Math.Sin(rx) + z1 * Math.Cos(rx));
+        }
+
+        public Vec3 InverseRotatePoint(Vec3 r)
+        {
+            double ry = YawDeg * Math.PI / 180.0;
+            double rx = PitchDeg * Math.PI / 180.0;
+            double x1 = r.X;
+            double y1 = r.Y * Math.Cos(rx) + r.Z * Math.Sin(rx);
+            double z1 = -r.Y * Math.Sin(rx) + r.Z * Math.Cos(rx);
+            return new Vec3(x1 * Math.Cos(ry) - z1 * Math.Sin(ry), y1, x1 * Math.Sin(ry) + z1 * Math.Cos(ry));
         }
 
         public Vec3 GetCameraLocalDir()
@@ -276,8 +337,8 @@ namespace ScienceWordOverlay.Models
         public Vec3 GetPartOffset(int sideSign)
         {
             Vec3 off = sideSign > 0 ? PartOffsetAbove : (sideSign < 0 ? PartOffsetBelow : new Vec3(0, 0, 0));
-            if (sideSign > 0 && SplitAmount > 0.005 && TryGetCutPlane(out _, out Vec3 n))
-                off = off + n * (SplitAmount * 0.85);
+            if (sideSign != 0 && SplitAmount > 0.005 && TryGetCutPlane(out _, out Vec3 n))
+                off = off + n * (sideSign * SplitAmount * 0.68);
             return off;
         }
 
@@ -712,6 +773,304 @@ namespace ScienceWordOverlay.Models
                 result.Add((sec.Points3D.Select(p => p + offBelow).ToList(), n, -1, true));
             }
             return result;
+        }
+
+        // ===================== AUTOCAD-STYLE 3D CSG MESH ENGINE (GIAO 2 KHỐI & CẮT TÁCH 2 NỬA) =====================
+        private static CsgFace3D MakeCsgFace(List<Vec3> verts, bool smooth = false, bool isCap = false, bool isCutCap = false, int sourceId = 0)
+        {
+            double nx = 0, ny = 0, nz = 0;
+            int n = verts.Count;
+            for (int i = 0; i < n; i++)
+            {
+                Vec3 a = verts[i], b = verts[(i + 1) % n];
+                nx += (a.Y - b.Y) * (a.Z + b.Z);
+                ny += (a.Z - b.Z) * (a.X + b.X);
+                nz += (a.X - b.X) * (a.Y + b.Y);
+            }
+            double len = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            Vec3 nrm = len > 1e-8 ? new Vec3(nx / len, ny / len, nz / len) : new Vec3(0, 1, 0);
+            return new CsgFace3D
+            {
+                Verts = verts,
+                Normal = nrm,
+                Area = 0.5 * len,
+                Smooth = smooth,
+                IsCap = isCap,
+                IsCutCap = isCutCap,
+                SourceId = sourceId
+            };
+        }
+
+        private static void EnsureOutwardFaces(List<CsgFace3D> faces, Vec3 center)
+        {
+            foreach (var f in faces)
+            {
+                if (f.Verts.Count < 3) continue;
+                double cx = 0, cy = 0, cz = 0;
+                foreach (var p in f.Verts) { cx += p.X; cy += p.Y; cz += p.Z; }
+                Vec3 fc = new(cx / f.Verts.Count, cy / f.Verts.Count, cz / f.Verts.Count);
+                if (Vec3.Dot(f.Normal, fc - center) < 0)
+                {
+                    f.Verts.Reverse();
+                    f.Normal = f.Normal * -1.0;
+                }
+            }
+        }
+
+        public static List<CsgEdge3D> BuildMeshEdges(List<CsgFace3D> faces)
+        {
+            var map = new Dictionary<(long, long), CsgEdge3D>();
+            static long HashPt(Vec3 p)
+            {
+                long x = (long)Math.Round(p.X * 500.0) + 500000L;
+                long y = (long)Math.Round(p.Y * 500.0) + 500000L;
+                long z = (long)Math.Round(p.Z * 500.0) + 500000L;
+                return (x << 40) ^ (y << 20) ^ z;
+            }
+            for (int fi = 0; fi < faces.Count; fi++)
+            {
+                var vs = faces[fi].Verts;
+                int m = vs.Count;
+                for (int i = 0; i < m; i++)
+                {
+                    Vec3 a = vs[i], b = vs[(i + 1) % m];
+                    if ((b - a).Length < 1e-4) continue;
+                    long ha = HashPt(a), hb = HashPt(b);
+                    var key = ha < hb ? (ha, hb) : (hb, ha);
+                    if (!map.TryGetValue(key, out var edge))
+                    {
+                        edge = new CsgEdge3D { A = a, B = b };
+                        map[key] = edge;
+                    }
+                    edge.FaceIndices.Add(fi);
+                }
+            }
+            return map.Values.ToList();
+        }
+
+        public static double ComputeMeshVolume(CsgSolidMesh? mesh)
+        {
+            if (mesh == null || mesh.Faces.Count < 4) return 0.0;
+            double vol = 0.0;
+            foreach (var f in mesh.Faces)
+            {
+                if (f.Verts.Count < 3) continue;
+                Vec3 v0 = f.Verts[0];
+                for (int i = 1; i < f.Verts.Count - 1; i++)
+                    vol += Vec3.Dot(v0, Vec3.Cross(f.Verts[i], f.Verts[i + 1])) / 6.0;
+            }
+            return Math.Abs(vol);
+        }
+
+        public CsgSolidMesh BuildCsgMesh(int sourceId = 0)
+        {
+            var mesh = new CsgSolidMesh();
+            Vec3 center = new(0, 0, 0);
+
+            if (Kind == "poly")
+            {
+                center = ComputeCentroid();
+                foreach (var f in Faces)
+                {
+                    var vs = f.VertexIds.Select(GetV).Where(v => v != null).Select(v => v!.Pos).ToList();
+                    if (vs.Count >= 3) mesh.Faces.Add(MakeCsgFace(vs, smooth: false, isCap: false, isCutCap: false, sourceId: sourceId));
+                }
+                foreach (var v in Vertices)
+                {
+                    if (!string.IsNullOrEmpty(v.Label) && string.IsNullOrEmpty(v.HostEdgeV1))
+                        mesh.NamedVerts.Add(new CsgNamedVert { Label = v.Label, Pos = v.Pos });
+                }
+            }
+            else if (Kind is "cylinder" or "cone")
+            {
+                bool isCone = Kind == "cone";
+                int N = 28;
+                double R = Radius, h2 = Height * 0.5;
+                var bot = new List<Vec3>(N);
+                var top = new List<Vec3>(N);
+                for (int i = 0; i < N; i++)
+                {
+                    double th = 2.0 * Math.PI * i / N;
+                    bot.Add(new Vec3(R * Math.Cos(th), -h2, R * Math.Sin(th)));
+                    top.Add(new Vec3(R * Math.Cos(th), h2, R * Math.Sin(th)));
+                }
+                mesh.Faces.Add(MakeCsgFace(new List<Vec3>(bot), smooth: false, isCap: false, isCutCap: false, sourceId: sourceId));
+                if (!isCone)
+                    mesh.Faces.Add(MakeCsgFace(new List<Vec3>(top), smooth: false, isCap: false, isCutCap: false, sourceId: sourceId));
+
+                Vec3 apex = new(0, h2, 0);
+                for (int i = 0; i < N; i++)
+                {
+                    int j = (i + 1) % N;
+                    var vs = isCone ? new List<Vec3> { bot[i], bot[j], apex } : new List<Vec3> { bot[i], bot[j], top[j], top[i] };
+                    mesh.Faces.Add(MakeCsgFace(vs, smooth: true, isCap: false, isCutCap: false, sourceId: sourceId));
+                }
+                mesh.NamedVerts.Add(new CsgNamedVert { Label = "O", Pos = new Vec3(0, -h2, 0) });
+                mesh.NamedVerts.Add(new CsgNamedVert { Label = isCone ? "S" : "O'", Pos = new Vec3(0, h2, 0) });
+            }
+            else if (Kind == "sphere")
+            {
+                int M = 10, N = 20;
+                double r = Radius;
+                Vec3 Q(int i, int j)
+                {
+                    double phi = Math.PI * i / M;
+                    double th = 2.0 * Math.PI * j / N;
+                    return new Vec3(r * Math.Sin(phi) * Math.Cos(th), r * Math.Cos(phi), r * Math.Sin(phi) * Math.Sin(th));
+                }
+                for (int j = 0; j < N; j++)
+                {
+                    mesh.Faces.Add(MakeCsgFace(new List<Vec3> { Q(0, 0), Q(1, j + 1), Q(1, j) }, smooth: true, sourceId: sourceId));
+                    mesh.Faces.Add(MakeCsgFace(new List<Vec3> { Q(M - 1, j), Q(M - 1, j + 1), Q(M, 0) }, smooth: true, sourceId: sourceId));
+                    for (int i = 1; i < M - 1; i++)
+                        mesh.Faces.Add(MakeCsgFace(new List<Vec3> { Q(i, j), Q(i, j + 1), Q(i + 1, j + 1), Q(i + 1, j) }, smooth: true, sourceId: sourceId));
+                }
+                mesh.NamedVerts.Add(new CsgNamedVert { Label = "O", Pos = new Vec3(0, 0, 0) });
+            }
+
+            EnsureOutwardFaces(mesh.Faces, center);
+            mesh.Edges = BuildMeshEdges(mesh.Faces);
+            return mesh;
+        }
+
+        public static CsgSolidMesh? ClipMeshByPlane(CsgSolidMesh mesh, Vec3 n, double d, bool smoothCap, bool isCutCap, int capSourceId = 1, bool buildEdges = true)
+        {
+            const double E = 1e-6;
+            var outFaces = new List<CsgFace3D>();
+            var capPts = new List<Vec3>();
+
+            foreach (var f in mesh.Faces)
+            {
+                int m = f.Verts.Count;
+                if (m < 3) continue;
+                var s = new double[m];
+                for (int i = 0; i < m; i++) s[i] = Vec3.Dot(n, f.Verts[i]) - d;
+
+                var nv = new List<Vec3>(m + 2);
+                for (int i = 0; i < m; i++)
+                {
+                    int j = (i + 1) % m;
+                    Vec3 a = f.Verts[i], b = f.Verts[j];
+                    double sa = s[i], sb = s[j];
+                    if (sa <= E) nv.Add(a);
+                    if (Math.Abs(sa) <= E) capPts.Add(a);
+                    if ((sa < -E && sb > E) || (sa > E && sb < -E))
+                    {
+                        double t = sa / (sa - sb);
+                        Vec3 p = a + (b - a) * t;
+                        nv.Add(p);
+                        capPts.Add(p);
+                    }
+                }
+                if (nv.Count >= 3)
+                {
+                    var g = MakeCsgFace(nv, f.Smooth, f.IsCap, f.IsCutCap, f.SourceId);
+                    if (Vec3.Dot(g.Normal, f.Normal) < 0) { g.Verts.Reverse(); g.Normal = g.Normal * -1.0; }
+                    if (g.Area > 1e-6) outFaces.Add(g);
+                }
+            }
+
+            if (outFaces.Count == 0) return null;
+
+            var unique = new List<Vec3>();
+            foreach (var p in capPts)
+                if (!unique.Any(q => (p - q).Length < 1e-4)) unique.Add(p);
+
+            var capNamed = new List<CsgNamedVert>();
+            if (unique.Count >= 3)
+            {
+                double cx = 0, cy = 0, cz = 0;
+                foreach (var p in unique) { cx += p.X; cy += p.Y; cz += p.Z; }
+                Vec3 c = new(cx / unique.Count, cy / unique.Count, cz / unique.Count);
+                Vec3 refV = Math.Abs(n.Z) < 0.9 ? new Vec3(0, 0, 1) : new Vec3(1, 0, 0);
+                Vec3 e1 = Vec3.Cross(n, refV).Normalized();
+                Vec3 e2 = Vec3.Cross(n, e1);
+                unique.Sort((p, q) => Math.Atan2(Vec3.Dot(p - c, e2), Vec3.Dot(p - c, e1)).CompareTo(Math.Atan2(Vec3.Dot(q - c, e2), Vec3.Dot(q - c, e1))));
+                var capFace = MakeCsgFace(unique, smoothCap, isCap: true, isCutCap: isCutCap, sourceId: capSourceId);
+                if (Vec3.Dot(capFace.Normal, n) < 0) { capFace.Verts.Reverse(); capFace.Normal = capFace.Normal * -1.0; }
+                if (capFace.Area > 1e-6)
+                {
+                    outFaces.Add(capFace);
+                    if (isCutCap && capFace.Verts.Count <= 12)
+                    {
+                        const string capLabels = "MNPQEFGHIJKL";
+                        for (int k = 0; k < capFace.Verts.Count; k++)
+                            capNamed.Add(new CsgNamedVert { Label = k < capLabels.Length ? capLabels[k].ToString() : $"K{k + 1}", Pos = capFace.Verts[k] });
+                    }
+                }
+            }
+
+            if (outFaces.Count < 4) return null;
+
+            var res = new CsgSolidMesh { Faces = outFaces, CapVerts = capNamed };
+            foreach (var nv in mesh.NamedVerts)
+                if (Vec3.Dot(n, nv.Pos) - d <= 1e-3) res.NamedVerts.Add(nv);
+            if (buildEdges) res.Edges = BuildMeshEdges(res.Faces);
+            return res;
+        }
+
+        public CsgCutHalvesResult ComputeCsgCutHalves()
+        {
+            var res = new CsgCutHalvesResult();
+            if (CutPlane == null || Kind == "plane_only" || !TryGetCutPlane(out Vec3 origin, out Vec3 n)) return res;
+
+            var baseMesh = BuildCsgMesh(sourceId: 0);
+            double d = Vec3.Dot(n, origin);
+            res.Upper = ClipMeshByPlane(baseMesh, n * -1.0, -d, smoothCap: false, isCutCap: true, capSourceId: 1, buildEdges: true);
+            res.Lower = ClipMeshByPlane(baseMesh, n, d, smoothCap: false, isCutCap: true, capSourceId: 1, buildEdges: true);
+
+            var capFace = res.Upper?.Faces.FirstOrDefault(f => f.IsCutCap) ?? res.Lower?.Faces.FirstOrDefault(f => f.IsCutCap);
+            res.SectionArea = capFace?.Area ?? 0.0;
+            res.VolUpper = ComputeMeshVolume(res.Upper);
+            res.VolLower = ComputeMeshVolume(res.Lower);
+            return res;
+        }
+
+        public static CsgIntersectionResult ComputeCsgIntersection(Solid3DScene a, Solid3DScene b)
+        {
+            var meshA = a.BuildCsgMesh(sourceId: 0);
+            var rawB = b.BuildCsgMesh(sourceId: 1);
+
+            // Chuyen chinh xac 100% meshB sang khong gian local 3D cua A (dung ty le, vi tri man hinh & goc xoay thuc!)
+            double ratio = b.Scale / Math.Max(1.0, a.Scale);
+            double dxCam = (b.CenterScreen.X - a.CenterScreen.X) / Math.Max(1.0, a.Scale);
+            double dyCam = -(b.CenterScreen.Y - a.CenterScreen.Y) / Math.Max(1.0, a.Scale);
+
+            Vec3 MapBToALocal(Vec3 pb)
+            {
+                Vec3 rb = b.RotatePoint(pb);
+                Vec3 rInACam = new(rb.X * ratio + dxCam, rb.Y * ratio + dyCam, rb.Z * ratio);
+                return a.InverseRotatePoint(rInACam);
+            }
+
+            var meshBInA = new CsgSolidMesh();
+            Vec3 centerBInA = MapBToALocal(b.Kind == "poly" ? b.ComputeCentroid() : new Vec3(0, 0, 0));
+            foreach (var f in rawB.Faces)
+            {
+                var mappedVerts = f.Verts.Select(MapBToALocal).ToList();
+                meshBInA.Faces.Add(MakeCsgFace(mappedVerts, f.Smooth, f.IsCap, f.IsCutCap, sourceId: 1));
+            }
+            EnsureOutwardFaces(meshBInA.Faces, centerBInA);
+            meshBInA.Edges = BuildMeshEdges(meshBInA.Faces);
+
+            CsgSolidMesh? cur = meshA;
+            foreach (var g in meshBInA.Faces)
+            {
+                if (cur == null) break;
+                double dPlane = Vec3.Dot(g.Normal, g.Verts[0]);
+                cur = ClipMeshByPlane(cur, g.Normal, dPlane, smoothCap: g.Smooth, isCutCap: false, capSourceId: 1, buildEdges: false);
+            }
+            if (cur != null) cur.Edges = BuildMeshEdges(cur.Faces);
+
+            return new CsgIntersectionResult
+            {
+                MeshA = meshA,
+                MeshBInA = meshBInA,
+                IntersectionMesh = cur,
+                VolA = ComputeMeshVolume(meshA),
+                VolB = ComputeMeshVolume(meshBInA),
+                VolI = ComputeMeshVolume(cur)
+            };
         }
 
         // ===================== GIAO 2 KHỐI 3D (SOLID INTERSECTION) =====================

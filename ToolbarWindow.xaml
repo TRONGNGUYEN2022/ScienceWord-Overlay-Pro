@@ -42,7 +42,7 @@
     <Grid>
         <Border x:Name="FabCirclePanel" Width="54" Height="54" CornerRadius="27" Margin="6"
                 Visibility="Collapsed" Cursor="Hand"
-                ToolTip="Click để bung thanh công cụ W² v10.8 | Kéo để di chuyển | Chuột phải bật/tắt Xuyên chuột"
+                ToolTip="Click để bung thanh công cụ W² v10.9 | Kéo để di chuyển | Chuột phải bật/tắt Xuyên chuột"
                 MouseLeftButtonDown="Fab_MouseLeftButtonDown"
                 MouseMove="Fab_MouseMove"
                 MouseLeftButtonUp="Fab_MouseLeftButtonUp"
@@ -67,7 +67,7 @@
             <StackPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource ActionBtn}" Content="◉" Width="24" Background="#1D4ED8" BorderBrush="#FBBF24" Foreground="#FBBF24" FontWeight="ExtraBold" ToolTip="Thu gọn thành 1 nút tròn nổi" Margin="0,0,4,0" Click="BtnToCircle_Click"/>
-                    <TextBlock Text="W² v10.8" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll" MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
+                    <TextBlock Text="W² v10.9" Foreground="#FBBF24" FontWeight="ExtraBold" FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0" Cursor="SizeAll" MouseLeftButtonDown="Grip_MouseLeftButtonDown"/>
                     <Border Background="#1E293B" BorderBrush="#38BDF8" BorderThickness="1" CornerRadius="4" Padding="5,1.5" Margin="0,0,4,0">
                         <TextBlock x:Name="TxtTargetApp" Text="Đích: Tự động" Foreground="#7DD3FC" FontSize="10.2" FontWeight="Bold" MaxWidth="110" TextTrimming="CharacterEllipsis"/>
                     </Border>

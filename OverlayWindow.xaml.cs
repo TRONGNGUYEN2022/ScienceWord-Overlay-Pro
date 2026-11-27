@@ -82,7 +82,11 @@ namespace ScienceWordOverlay
                 }
                 row1.Children.Add(MakeCtxBtn(Surface.ShowCoordSystem3D ? "🌐 Oxyz ✓" : "🌐 Oxyz", () => Surface.ToggleCoordSystem3D(), Surface.ShowCoordSystem3D ? "#1D4ED8" : "#334155", tooltip: "Bật / tắt Hệ tọa độ không gian Oxyz"));
                 if (Surface.Solids3DList.Count >= 2)
-                    row1.Children.Add(MakeCtxBtn("⋈ Giao 2 khối", () => Surface.IntersectActiveSolids3D(), "#9333EA", tooltip: "Tính giao giữa 2 khối 3D"));
+                {
+                    row1.Children.Add(MakeCtxBtn(Surface.HasActiveCsgIntersection ? "⋈ Tắt giao" : "⋈ Giao 2 khối", () => Surface.IntersectActiveSolids3D(), Surface.HasActiveCsgIntersection ? "#7E22CE" : "#9333EA", tooltip: "Tính giao khối 3D kiểu AutoCAD (A ∩ B)"));
+                    if (Surface.HasActiveCsgIntersection)
+                        row1.Children.Add(MakeCtxBtn(Surface.IsIntersectionPulledOut ? "↺ Ghép A∩B" : "✂️ Tách A∩B", () => Surface.TogglePullIntersectionOut(), "#EA580C", tooltip: "Kéo tách phần giao A ∩ B ra ngoài để quan sát"));
+                }
                 row1.Children.Add(MakeCtxBtn("＋", () => Surface.ScaleSolid3D(1.12), tooltip: "Phóng to khối 3D"));
                 row1.Children.Add(MakeCtxBtn("－", () => Surface.ScaleSolid3D(0.89), tooltip: "Thu nhỏ khối 3D"));
                 if (s3.Kind == "poly")
@@ -114,7 +118,8 @@ namespace ScienceWordOverlay
                     row2.Children.Add(MakeCtxBtn("⟳", () => Surface.TiltCutPlane3D(12.0), "#4C1D95", tooltip: "Xoay góc nghiêng mặt phẳng (P) phải"));
                     row2.Children.Add(MakeCtxBtn("⊥ Dọc", () => Surface.SetCutPlaneVertical90(), "#0F766E", tooltip: "Cắt dọc 90° qua trục (HCN / Tam giác cân / Đường tròn lớn)"));
                     row2.Children.Add(MakeCtxBtn(s3.CutPlane.Visible ? "👁 Ẩn (P)" : "👁 Hiện (P)", () => Surface.ToggleCutPlaneVisible(), "#334155", tooltip: "Bật / tắt hiển thị tấm mặt phẳng (P)"));
-                    row2.Children.Add(MakeCtxBtn("↺ Ghép phần", () => Surface.ResetSolidPartOffsets(), "#047857", tooltip: "Ghép khít các phần đã kéo tách"));
+                    row2.Children.Add(MakeCtxBtn(s3.HasActiveSplit ? "↺ Ghép khít" : "✂️ Tách 2 nửa", () => Surface.SeparateSolidCutHalves(), s3.HasActiveSplit ? "#047857" : "#DC2626", tooltip: "Tách đôi khối 3D qua mặt phẳng (P) hoặc ghép khít lại"));
+                    row2.Children.Add(MakeCtxBtn("↺ Về 0", () => Surface.ResetSolidPartOffsets(), "#0F766E", tooltip: "Đặt lại vị trí 2 phần về 0"));
                     row2.Children.Add(MakeCtxBtn("✕ Gỡ (P)", () => Surface.RemoveCutPlane3D(), "#991B1B", tooltip: "Xóa mặt phẳng cắt (P)"));
                     ContextMenuItems.Children.Add(row2);
                 }

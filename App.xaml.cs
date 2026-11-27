@@ -30,7 +30,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.8 (Cắt tách thực 2 nửa 3D + Net GeoGebra mượt + Giao 2 khối trực tiếp + Oxyz xuất ảnh + Tối ưu GPU 60fps) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.9 (Giao 2 khối CSG chuẩn AutoCAD + Cắt tách 2 nửa chuẩn SGK (M,N,P,Q) cho mọi khối 3D + Net GeoGebra + Oxyz) sẵn sàng!");
         }
     }
 }

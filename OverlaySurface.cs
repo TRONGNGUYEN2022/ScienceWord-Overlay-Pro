@@ -60,6 +60,10 @@ namespace ScienceWordOverlay
         private readonly List<Vec3> _arbitraryPlanePoints = new();
         private Solid3DScene? _intersectSolidA;
         private Solid3DScene? _intersectSolidB;
+        private Vec3 _intersectPullOffset = new(0, 0, 0);
+        private bool _isDraggingIntersection = false;
+        private CsgIntersectionResult? _cachedCsgResult;
+        private string _cachedCsgKey = "";
 
         // Cached static Typefaces for zero-allocation 60fps rendering
         private static readonly Typeface TfMathItalicBold = new(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
@@ -468,6 +472,23 @@ namespace ScienceWordOverlay
 
 
 
+        public bool HasActiveCsgIntersection => _intersectSolidA != null && _intersectSolidB != null && Solids3DList.Contains(_intersectSolidA) && Solids3DList.Contains(_intersectSolidB);
+        public bool IsIntersectionPulledOut => _intersectPullOffset.Length > 0.05;
+
+        private CsgIntersectionResult? GetOrComputeCsgIntersection()
+        {
+            if (!HasActiveCsgIntersection) return null;
+            var a = _intersectSolidA!;
+            var b = _intersectSolidB!;
+            string key = $"{a.Id}:{a.CenterScreen.X:0.0},{a.CenterScreen.Y:0.0},{a.Scale:0.0},{a.YawDeg:0.1},{a.PitchDeg:0.1}|{b.Id}:{b.CenterScreen.X:0.0},{b.CenterScreen.Y:0.0},{b.Scale:0.0},{b.YawDeg:0.1},{b.PitchDeg:0.1}";
+            if (_cachedCsgResult == null || _cachedCsgKey != key)
+            {
+                _cachedCsgResult = Solid3DScene.ComputeCsgIntersection(a, b);
+                _cachedCsgKey = key;
+            }
+            return _cachedCsgResult;
+        }
+
         public void IntersectActiveSolids3D()
         {
             if (Solids3DList.Count < 2)
@@ -480,17 +501,35 @@ namespace ScienceWordOverlay
             if (_intersectSolidA == a && _intersectSolidB == b)
             {
                 _intersectSolidA = null; _intersectSolidB = null;
+                _cachedCsgResult = null; _cachedCsgKey = "";
+                _intersectPullOffset = new Vec3(0, 0, 0);
                 InvalidateVisual(); RefreshSolid3DMenu();
-                ShowToast("Đã tắt hiển thị vùng giao 2 khối 3D.");
+                ShowToast("Đã tắt chế độ giao 2 khối AutoCAD (A ∩ B).");
                 return;
             }
             _intersectSolidA = a;
             _intersectSolidB = b;
-            var pts = Solid3DScene.ComputeSolidIntersectionPoints(a, b);
+            _cachedCsgResult = null; _cachedCsgKey = "";
+            _intersectPullOffset = new Vec3(0, 0, 0);
+            var res = GetOrComputeCsgIntersection();
             InvalidateVisual(); RefreshSolid3DMenu();
-            ShowToast(pts.Count > 0
-                ? $"✓ Đang bật giao trực tiếp {a.Name} ∩ {b.Name} ({pts.Count} điểm giao — kéo/xoay khối để xem cập nhật theo thời gian thực)!"
-                : $"Đã gắn theo dõi giao {a.Name} ∩ {b.Name} — hãy kéo 2 khối chồng lên nhau để thấy đường giao tự động xuất hiện!", 4800);
+            if (res?.IntersectionMesh != null)
+            {
+                int pct = res.VolA > 1e-4 ? (int)Math.Round(res.VolI / res.VolA * 100.0) : 0;
+                ShowToast($"✓ Giao AutoCAD {a.Name} ∩ {b.Name}: V ≈ {res.VolI:0.00} ({pct}% khối A)! Kéo khối giao ra ngoài hoặc bấm [Tách A∩B].", 4800);
+            }
+            else
+            {
+                ShowToast($"Đã bật Giao 2 khối ({a.Name} ∩ {b.Name}) — hãy kéo 2 khối chồng lên nhau để thấy khối giao 3D!", 4800);
+            }
+        }
+
+        public void TogglePullIntersectionOut()
+        {
+            if (!HasActiveCsgIntersection) return;
+            _intersectPullOffset = IsIntersectionPulledOut ? new Vec3(0, 0, 0) : new Vec3(0, 1.55, 0);
+            InvalidateVisual(); RefreshSolid3DMenu();
+            ShowToast(IsIntersectionPulledOut ? "✂️ Đã tách khối giao A ∩ B ra ngoài!" : "↺ Đã ghép khối giao A ∩ B về vị trí gốc.");
         }
 
         public void ToggleSolid3DShaded()
@@ -580,6 +619,19 @@ namespace ScienceWordOverlay
             Solid3D.ResetPartOffsets();
             InvalidateVisual(); RefreshSolid3DMenu();
             ShowToast("Đã gỡ Mặt phẳng cắt (P) & ghép khít khối");
+        }
+
+        public void SeparateSolidCutHalves()
+        {
+            if (Solid3D == null) return;
+            if (Solid3D.CutPlane == null) Solid3D.InitInteractiveCutPlane(FillColorHex);
+            Solid3D.PartOffsetAbove = new Vec3(0, 0, 0);
+            Solid3D.PartOffsetBelow = new Vec3(0, 0, 0);
+            Solid3D.SplitAmount = Solid3D.HasActiveSplit ? 0.0 : 0.78;
+            InvalidateVisual(); RefreshSolid3DMenu();
+            ShowToast(Solid3D.HasActiveSplit
+                ? "✂️ Đã tách khối thành 2 phần qua mặt phẳng (P)! Kéo trực tiếp từng nửa để di chuyển tự do."
+                : "↺ Đã ghép khít 2 phần về lại khối nguyên vẹn!", 4200);
         }
 
         public void ResetSolidPartOffsets()
@@ -1052,20 +1104,25 @@ namespace ScienceWordOverlay
                 foreach (var (pts3d, _, _, _) in sc.ComputeNetFacePolygons3D())
                     foreach (var p3 in pts3d) { Point p = sc.Project(p3, out _); xs.Add(p.X); ys.Add(p.Y); }
             }
+            else if (sc.CutPlane != null && sc.Kind != "plane_only")
+            {
+                var halves = sc.ComputeCsgCutHalves();
+                Vec3 offUp = sc.GetPartOffset(1), offLo = sc.GetPartOffset(-1);
+                if (halves.Upper != null)
+                    foreach (var f in halves.Upper.Faces) foreach (var p3 in f.Verts) { Point p = sc.Project(p3 + offUp, out _); xs.Add(p.X); ys.Add(p.Y); }
+                if (halves.Lower != null)
+                    foreach (var f in halves.Lower.Faces) foreach (var p3 in f.Verts) { Point p = sc.Project(p3 + offLo, out _); xs.Add(p.X); ys.Add(p.Y); }
+                if (xs.Count == 0)
+                    foreach (var v in sc.Vertices) { Point p = sc.Project(v.Pos, out _); xs.Add(p.X); ys.Add(p.Y); }
+            }
             else if (sc.Kind == "sphere")
             {
-                Vec3 offSph = sc.GetPartOffset(sc.GetPartSideSign(new Vec3(0, 0, 0)));
-                Point c = sc.Project(offSph, out _);
+                Point c = sc.Project(new Vec3(0, 0, 0), out _);
                 double r = sc.Radius * sc.Scale;
                 xs.Add(c.X - r); xs.Add(c.X + r); ys.Add(c.Y - r); ys.Add(c.Y + r);
             }
             else
             {
-                if (sc.Kind == "poly" && sc.HasActiveSplit)
-                {
-                    foreach (var (pts3d, _, _, _) in sc.ComputeSplitPolyHalves3D())
-                        foreach (var p3 in pts3d) { Point p = sc.Project(p3, out _); xs.Add(p.X); ys.Add(p.Y); }
-                }
                 foreach (var v in sc.Vertices) { Point p = sc.Project(sc.GetEffectivePos(v, true), out _); xs.Add(p.X); ys.Add(p.Y); }
                 if (sc.Kind is "cone" or "cylinder")
                 {
@@ -1103,31 +1160,51 @@ namespace ScienceWordOverlay
             return null;
         }
 
+        private static bool PointInPoly2D(Point pt, Point[] poly)
+        {
+            if (poly.Length < 3) return false;
+            bool inside = false;
+            for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+            {
+                if (((poly[i].Y > pt.Y) != (poly[j].Y > pt.Y)) &&
+                    (pt.X < (poly[j].X - poly[i].X) * (pt.Y - poly[i].Y) / (poly[j].Y - poly[i].Y + 1e-9) + poly[i].X))
+                    inside = !inside;
+            }
+            return inside;
+        }
+
+        private static bool HitTestCsgMesh2D(Solid3DScene sc, CsgSolidMesh? mesh, Vec3 offset, Point pos)
+        {
+            if (mesh == null) return false;
+            foreach (var f in mesh.Faces)
+            {
+                if (f.Verts.Count < 3) continue;
+                var pts = new Point[f.Verts.Count];
+                for (int i = 0; i < f.Verts.Count; i++) pts[i] = sc.Project(f.Verts[i] + offset, out _);
+                if (PointInPoly2D(pos, pts)) return true;
+            }
+            return false;
+        }
+
         private int HitTestCutPartSide(Solid3DScene sc, Point pos)
         {
-            if (sc.CutPlane == null || !sc.TryGetCutPlane(out Vec3 o, out Vec3 n)) return 0;
-            bool hasSplit = sc.SplitAmount > 0.01 || sc.PartOffsetAbove.Length > 0.01 || sc.PartOffsetBelow.Length > 0.01;
-            if (!hasSplit) return 0;
+            if (sc.CutPlane == null || sc.Kind == "plane_only" || sc.IsNetUnfolded) return 0;
+            var halves = sc.ComputeCsgCutHalves();
+            Vec3 offUp = sc.GetPartOffset(1);
+            Vec3 offLo = sc.GetPartOffset(-1);
 
-            if (sc.Kind == "poly" && sc.Vertices.Count > 0)
+            bool hitUp = HitTestCsgMesh2D(sc, halves.Upper, offUp, pos);
+            bool hitLo = HitTestCsgMesh2D(sc, halves.Lower, offLo, pos);
+            if (hitUp && !hitLo) return 1;
+            if (hitLo && !hitUp) return -1;
+            if (hitUp && hitLo && sc.TryGetCutPlane(out Vec3 o, out Vec3 n))
             {
-                int bestSide = 0;
-                double bestDist = double.MaxValue;
-                foreach (var v in sc.Vertices)
-                {
-                    int side = sc.GetPartSideSign(v.Pos);
-                    if (side == 0) continue;
-                    Point sp = sc.Project(sc.GetEffectivePos(v, true), out _);
-                    double d = Dist(pos, sp);
-                    if (d < bestDist) { bestDist = d; bestSide = side; }
-                }
-                return bestSide;
+                Point pCutScreen = sc.Project(o, out _);
+                Vec3 rotN = sc.RotatePoint(n);
+                double signScreen = (pos.X - pCutScreen.X) * rotN.X - (pos.Y - pCutScreen.Y) * rotN.Y;
+                return signScreen >= 0 ? 1 : -1;
             }
-            // Voi Non / Tru / Cau: so sanh vi tri click voi mat phang cat da dich chuyen
-            Point pCutScreen = sc.Project(o, out _);
-            Vec3 rotN = sc.RotatePoint(n);
-            double signScreen = (pos.X - pCutScreen.X) * rotN.X - (pos.Y - pCutScreen.Y) * rotN.Y;
-            return signScreen >= 0 ? 1 : -1;
+            return 0; // Click ngoai 2 nua (vi du tren canh mat phang (P)) -> di chuyen ca khoi!
         }
 
         private void RefreshSolid3DMenu() { var b = GetSolid3DBounds(); if (!b.IsEmpty) ContextMenuRequested?.Invoke("3d", new Point(b.Left, b.Top)); }
@@ -2222,6 +2299,19 @@ namespace ScienceWordOverlay
                     _isDraggingGroup = true; _groupLastPos = pos;
                     CaptureMouse(); InvalidateVisual(); RefreshHandwritingMenu(); return;
                 }
+                if (HasActiveCsgIntersection)
+                {
+                    var csgHit = GetOrComputeCsgIntersection();
+                    if (csgHit?.IntersectionMesh != null && HitTestCsgMesh2D(_intersectSolidA!, csgHit.IntersectionMesh, _intersectPullOffset, pos))
+                    {
+                        ClearGroupSelection();
+                        _isDraggingIntersection = true;
+                        _orbitLastPos = pos;
+                        CaptureMouse(); InvalidateVisual(); RefreshSolid3DMenu();
+                        ShowToast("✂️ Đang kéo khối giao A ∩ B! Kéo ra ngoài để quan sát rõ phần giao 3D.", 2400);
+                        return;
+                    }
+                }
                 var hitSolid = FindSolid3DAt(pos);
                 if (hitSolid != null)
                 {
@@ -2401,6 +2491,14 @@ namespace ScienceWordOverlay
             Point pos = e.GetPosition(this);
             _mousePos = pos;
 
+            if (_isDraggingIntersection && _intersectSolidA != null)
+            {
+                var sc = _intersectSolidA;
+                double denom = Math.Max(20.0, sc.Scale);
+                Vec3 deltaCam = new((pos.X - _orbitLastPos.X) / denom, -(pos.Y - _orbitLastPos.Y) / denom, 0);
+                _intersectPullOffset = _intersectPullOffset + sc.InverseRotatePoint(deltaCam);
+                _orbitLastPos = pos; InvalidateVisual(); return;
+            }
             if (_draggingCutPartSide != 0 && (_activeMoveSolid3D ?? Solid3D) != null)
             {
                 var sc = _activeMoveSolid3D ?? Solid3D!;
@@ -2536,7 +2634,7 @@ namespace ScienceWordOverlay
             if (wasDraggingGroup) RefreshActiveSelectionMenu();
             _dragRevRegionIdx = -1;
             _isOrbiting3D = false; _isMoving3D = false; _isOrbitingRev3D = false;
-            _draggingCutPartSide = 0; _activeOrbitSolid3D = null; _activeMoveSolid3D = null;
+            _draggingCutPartSide = 0; _isDraggingIntersection = false; _activeOrbitSolid3D = null; _activeMoveSolid3D = null;
             _draggingPointId = null; _draggingTextId = null; _draggingMathId = null; _activeStroke = null;
             if (IsMouseCaptured) ReleaseMouseCapture();
         }
@@ -2679,27 +2777,24 @@ namespace ScienceWordOverlay
             // 0.43 Hệ tọa độ không gian Oxyz (khi bật sẽ hiển thị cả lúc xuất/chèn ảnh!)
             if (ShowCoordSystem3D) RenderSpatialCoordinateSystem3D(dc, dpi);
 
-            // 0.45 Các khối 3D & Mặt phẳng (Nón/Trụ/Cầu nét đứt chuẩn + Chóp/Lăng trụ + Khai triển Net GeoGebra)
-            foreach (var sc3 in Solids3DList)
-                RenderSolid3D(dc, sc3, cleanExport, dpi);
-
-            // 0.46 Giao trực tiếp giữa 2 khối 3D (tự cập nhật khi kéo/xoay 1 trong 2 khối)
-            if (_intersectSolidA != null && _intersectSolidB != null && Solids3DList.Contains(_intersectSolidA) && Solids3DList.Contains(_intersectSolidB))
+            // 0.45 Các khối 3D & Giao 2 khối kiểu AutoCAD CSG
+            bool renderedCsgPair = false;
+            if (HasActiveCsgIntersection)
             {
-                var liveInterPts = Solid3DScene.ComputeSolidIntersectionPoints(_intersectSolidA, _intersectSolidB);
-                if (liveInterPts.Count > 0)
+                var csgRes = GetOrComputeCsgIntersection();
+                if (csgRes != null)
                 {
-                    var interPts2d = liveInterPts.Select(p => _intersectSolidA.Project(p, out _)).ToList();
-                    if (interPts2d.Count >= 2)
-                    {
-                        var gInt = new StreamGeometry();
-                        using (var ctx = gInt.Open()) { ctx.BeginFigure(interPts2d[0], true, interPts2d.Count >= 3); ctx.PolyLineTo(interPts2d.Skip(1).ToList(), true, false); }
-                        gInt.Freeze();
-                        dc.DrawGeometry(FrozenBrush(Color.FromArgb(72, 239, 68, 68)), new Pen(FrozenBrush(Color.FromRgb(220, 38, 38)), 2.4), gInt);
-                    }
-                    foreach (var ip in interPts2d)
-                        dc.DrawEllipse(FrozenBrush(Color.FromRgb(239, 68, 68)), new Pen(Brushes.White, 1.4), ip, 4.2, 4.2);
+                    foreach (var sc3 in Solids3DList)
+                        if (sc3 != _intersectSolidA && sc3 != _intersectSolidB)
+                            RenderSolid3D(dc, sc3, cleanExport, dpi);
+                    RenderAutoCadCsgIntersection(dc, _intersectSolidA!, _intersectSolidB!, csgRes, cleanExport, dpi);
+                    renderedCsgPair = true;
                 }
+            }
+            if (!renderedCsgPair)
+            {
+                foreach (var sc3 in Solids3DList)
+                    RenderSolid3D(dc, sc3, cleanExport, dpi);
             }
 
             // 0.47 Đang chọn điểm dựng mặt phẳng (P) tự do (hiện rõ kể cả khi chưa có khối 3D nào!)
@@ -3125,6 +3220,12 @@ namespace ScienceWordOverlay
                 return;
             }
 
+            if (s.CutPlane != null)
+            {
+                RenderTextbookCutSolid3D(dc, s, cleanExport, lightDir, lblTf, lblCol, dpi);
+                return;
+            }
+
             if (s.Kind == "sphere")
             {
                 Vec3 offSph = s.GetPartOffset(s.GetPartSideSign(new Vec3(0, 0, 0)));
@@ -3497,6 +3598,255 @@ namespace ScienceWordOverlay
             dc.DrawText(ftO, new Point(pO.X - 14, pO.Y + 4));
         }
 
+        private void RenderCsgMeshPart(
+            DrawingContext dc,
+            Solid3DScene refSc,
+            CsgSolidMesh mesh,
+            Vec3 offset,
+            Color baseCol,
+            Color capCol,
+            bool isSolidShaded,
+            bool isGhost,
+            Vec3 lightDir,
+            double edgeWidth,
+            bool highlightSeams,
+            bool drawLabels,
+            Typeface lblTf,
+            double dpi,
+            bool drawCapLabels = false)
+        {
+            int nf = mesh.Faces.Count;
+            if (nf == 0) return;
+
+            var projFaces = new (Point[] pts, double depth, bool front, double shade, CsgFace3D face)[nf];
+            for (int i = 0; i < nf; i++)
+            {
+                var f = mesh.Faces[i];
+                int mv = f.Verts.Count;
+                var pts = new Point[mv];
+                double sumZ = 0;
+                for (int k = 0; k < mv; k++)
+                {
+                    pts[k] = refSc.Project(f.Verts[k] + offset, out double z);
+                    sumZ += z;
+                }
+                Vec3 rotN = refSc.RotatePoint(f.Normal);
+                bool front = rotN.Z > 0.0;
+                double shade = Math.Clamp(0.52 + 0.55 * Math.Max(0.0, Vec3.Dot(rotN, lightDir)), 0.35, 1.18);
+                projFaces[i] = (pts, sumZ / Math.Max(1, mv), front, shade, f);
+            }
+
+            // 1. To cac mat huong ve phia nguoi nhin (sap xep Painter theo chieu sau Z)
+            var drawOrder = Enumerable.Range(0, nf)
+                .Where(i => isGhost || projFaces[i].front)
+                .OrderBy(i => projFaces[i].depth)
+                .ToList();
+
+            foreach (int i in drawOrder)
+            {
+                var pf = projFaces[i];
+                if (pf.pts.Length < 3) continue;
+                var g = new StreamGeometry();
+                using (var ctx = g.Open())
+                {
+                    ctx.BeginFigure(pf.pts[0], true, true);
+                    ctx.PolyLineTo(pf.pts.Skip(1).ToList(), false, false);
+                }
+                g.Freeze();
+
+                Color c = pf.face.IsCutCap ? capCol : baseCol;
+                Color fillCol;
+                Pen? seamFillPen = null;
+                if (isGhost)
+                {
+                    fillCol = ShadeColor(c, pf.shade, pf.front ? 0.16 : 0.08);
+                }
+                else if (isSolidShaded)
+                {
+                    double op = pf.face.IsCutCap ? 0.90 : Math.Clamp(refSc.SolidOpacity + 0.35, 0.72, 0.96);
+                    fillCol = ShadeColor(c, pf.shade, op);
+                    seamFillPen = new Pen(FrozenBrush(ShadeColor(c, pf.shade * 0.92, op)), 0.65);
+                }
+                else
+                {
+                    // Che do SGK (khung day trong mo giong image_dbfab4 & image_dbfad6!)
+                    fillCol = ShadeColor(c, 1.0, pf.face.IsCutCap ? 0.62 : 0.14);
+                }
+                dc.DrawGeometry(FrozenBrush(fillCol), seamFillPen, g);
+            }
+
+            // 2. Ve canh: an canh noi bo mat cong (smooth), giu duong vien silhouette, canh khuat NET DUT, canh giao tuyen/thiet dien DO DAM!
+            var dashStyle = new DashStyle(new double[] { 5.5, 4.0 }, 0);
+            dashStyle.Freeze();
+
+            foreach (var e in mesh.Edges)
+            {
+                if (e.FaceIndices.Count == 0) continue;
+                bool anyFront = false, allFront = true, allSmooth = true, anyCutCap = false;
+                int firstSrc = projFaces[e.FaceIndices[0]].face.SourceId;
+                bool isSeam = false;
+
+                foreach (int fi in e.FaceIndices)
+                {
+                    var pf = projFaces[fi];
+                    if (pf.front) anyFront = true; else allFront = false;
+                    if (!pf.face.Smooth) allSmooth = false;
+                    if (pf.face.IsCutCap && !pf.face.Smooth) anyCutCap = true;
+                    if (pf.face.SourceId != firstSrc) isSeam = true;
+                }
+
+                bool isSilhouette = e.FaceIndices.Count > 1 && anyFront && !allFront;
+                if (allSmooth && !isSilhouette && !isSeam) continue;
+                if (!anyFront && isSolidShaded && !isGhost && !anyCutCap && !isSeam) continue;
+
+                Color strokeCol;
+                double w;
+                if (isGhost)
+                {
+                    strokeCol = ShadeColor(baseCol, 0.62, anyFront ? 0.88 : 0.50);
+                    w = 1.25;
+                }
+                else if (anyCutCap || (highlightSeams && isSeam))
+                {
+                    strokeCol = Color.FromRgb(185, 28, 28); // Do dam #B91C1C chuan SGK & AutoCAD seam!
+                    w = Math.Max(2.2, edgeWidth);
+                }
+                else
+                {
+                    strokeCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard)
+                        ? Color.FromRgb(248, 250, 252)
+                        : Color.FromRgb(15, 23, 42);
+                    w = Math.Max(1.55, edgeWidth * 0.72);
+                }
+
+                var pen = new Pen(FrozenBrush(strokeCol), w)
+                {
+                    StartLineCap = PenLineCap.Round,
+                    EndLineCap = PenLineCap.Round,
+                    DashCap = PenLineCap.Flat
+                };
+                if (!anyFront) pen.DashStyle = dashStyle;
+                pen.Freeze();
+
+                Point pA = refSc.Project(e.A + offset, out _);
+                Point pB = refSc.Project(e.B + offset, out _);
+                dc.DrawLine(pen, pA, pB);
+            }
+
+            // 3. Ve nhan dinh goc (S, A, B, C, D) va nhan dinh thiet dien (M, N, P, Q)
+            if (drawLabels)
+            {
+                Color origLblCol = (CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard)
+                    ? Colors.White
+                    : Color.FromRgb(30, 58, 138);
+                foreach (var nv in mesh.NamedVerts)
+                {
+                    if (string.IsNullOrEmpty(nv.Label)) continue;
+                    Point pt = refSc.Project(nv.Pos + offset, out _);
+                    dc.DrawEllipse(FrozenBrush(origLblCol), new Pen(Brushes.White, 1.1), pt, 2.8, 2.8);
+                    var ft = new FormattedText(nv.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 18, FrozenBrush(origLblCol), dpi);
+                    dc.DrawText(ft, new Point(pt.X + 7, pt.Y - 17));
+                }
+            }
+            if (drawCapLabels && mesh.CapVerts.Count > 0)
+            {
+                Color capLblCol = Color.FromRgb(185, 28, 28);
+                foreach (var cv in mesh.CapVerts)
+                {
+                    Point pt = refSc.Project(cv.Pos + offset, out _);
+                    dc.DrawEllipse(FrozenBrush(capLblCol), new Pen(Brushes.White, 1.2), pt, 3.2, 3.2);
+                    var ft = new FormattedText(cv.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 17, FrozenBrush(capLblCol), dpi);
+                    dc.DrawText(ft, new Point(pt.X + 6, pt.Y - 16));
+                }
+            }
+        }
+
+        private void RenderAutoCadCsgIntersection(DrawingContext dc, Solid3DScene a, Solid3DScene b, CsgIntersectionResult csg, bool cleanExport, double dpi)
+        {
+            Vec3 lightDir = new Vec3(-0.32, 0.62, 0.72).Normalized();
+            Color colA = ParseColor(a.SolidColorHex, 1.0);
+            Color colB = ParseColor(b.SolidColorHex, 1.0);
+            if (colA == colB) colB = ParseColor("#10B981", 1.0);
+            Color colInter = ParseColor("#F97316", 1.0); // Mau cam AutoCAD CSG ruc ro
+
+            // 1. Ve 2 khoi A va B dang vo trong suot AutoCAD Ghost (de thay ro ben trong)
+            RenderCsgMeshPart(dc, a, csg.MeshA, new Vec3(0, 0, 0), colA, colInter, isSolidShaded: false, isGhost: true, lightDir, StrokeWidth, false, true, TfMathItalicBold, dpi);
+            RenderCsgMeshPart(dc, a, csg.MeshBInA, new Vec3(0, 0, 0), colB, colInter, isSolidShaded: false, isGhost: true, lightDir, StrokeWidth, false, false, TfMathItalicBold, dpi);
+
+            // 2. Ve KHOI GIAO 3D THUC A ∩ B (co do bong 3D, duong giao tuyen do sac net, keo ra ngoai duoc!)
+            if (csg.IntersectionMesh != null)
+            {
+                RenderCsgMeshPart(dc, a, csg.IntersectionMesh, _intersectPullOffset, colInter, colInter, isSolidShaded: true, isGhost: false, lightDir, StrokeWidth, highlightSeams: true, drawLabels: false, TfMathItalicBold, dpi);
+
+                if (!cleanExport)
+                {
+                    int pct = csg.VolA > 1e-4 ? (int)Math.Round(csg.VolI / csg.VolA * 100.0) : 0;
+                    Point hudPt = a.Project(_intersectPullOffset + new Vec3(0, 1.25, 0), out _);
+                    var ft = new FormattedText($"A ∩ B  |  V ≈ {csg.VolI:0.00} ({pct}% khối A)", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, TfUiBold, 11.5, FrozenBrush(Color.FromRgb(185, 28, 28)), dpi);
+                    var pill = new Rect(hudPt.X - ft.Width * 0.5 - 8, hudPt.Y - 12, ft.Width + 16, ft.Height + 6);
+                    dc.DrawRoundedRectangle(FrozenBrush(Color.FromArgb(235, 255, 247, 237)), new Pen(FrozenBrush(Color.FromRgb(234, 88, 12)), 1.2), pill, 6, 6);
+                    dc.DrawText(ft, new Point(pill.X + 8, pill.Y + 3));
+                }
+            }
+        }
+
+        private void RenderTextbookCutSolid3D(DrawingContext dc, Solid3DScene s, bool cleanExport, Vec3 lightDir, Typeface lblTf, Color lblCol, double dpi)
+        {
+            var plane = s.CutPlane!;
+            var halves = s.ComputeCsgCutHalves();
+            Vec3 offUp = s.GetPartOffset(1);
+            Vec3 offLo = s.GetPartOffset(-1);
+
+            Color colUpper = ParseColor(s.SolidColorHex, 1.0);
+            Color colLower = ParseColor("#34D399", 1.0);
+            Color colSection = ParseColor("#F97316", 1.0); // Cam do chuan SGK giong image_dbfab4 & image_dbfad6!
+
+            // Sap xep chieu sau 3 lop: nua sau -> tam mat phang (P) -> nua truoc
+            double zPlane = s.RotatePoint(plane.Origin).Z;
+            double zUp = halves.Upper != null && halves.Upper.Faces.Count > 0 ? halves.Upper.Faces.Average(f => s.RotatePoint(f.Verts[0] + offUp).Z) : zPlane + 0.1;
+            double zLo = halves.Lower != null && halves.Lower.Faces.Count > 0 ? halves.Lower.Faces.Average(f => s.RotatePoint(f.Verts[0] + offLo).Z) : zPlane - 0.1;
+
+            var layers = new List<(double z, Action draw)>();
+            if (plane.Visible)
+                layers.Add((zPlane, () => DrawCutPlaneSheet3D(dc, s, plane, lblTf, dpi)));
+
+            if (halves.Lower != null)
+                layers.Add((zLo, () => RenderCsgMeshPart(dc, s, halves.Lower, offLo, colLower, colSection, s.IsSolidShaded, isGhost: false, lightDir, StrokeWidth, highlightSeams: false, drawLabels: true, lblTf, dpi, drawCapLabels: halves.Upper == null)));
+
+            if (halves.Upper != null)
+                layers.Add((zUp, () => RenderCsgMeshPart(dc, s, halves.Upper, offUp, colUpper, colSection, s.IsSolidShaded, isGhost: false, lightDir, StrokeWidth, highlightSeams: false, drawLabels: true, lblTf, dpi, drawCapLabels: true)));
+
+            // Neu mat phang chua cat qua khoi (chi nam o bien) -> ve lai khoi nguyen ven
+            if (halves.Upper == null && halves.Lower == null)
+            {
+                var intact = s.BuildCsgMesh(0);
+                layers.Add((0.0, () => RenderCsgMeshPart(dc, s, intact, new Vec3(0, 0, 0), colUpper, colSection, s.IsSolidShaded, isGhost: false, lightDir, StrokeWidth, false, true, lblTf, dpi)));
+            }
+
+            layers.Sort((x, y) => x.z.CompareTo(y.z));
+            foreach (var item in layers) item.draw();
+
+            // Hinh cau khi chua keo tach: ve them tam H, doan vuong goc OH va ban kinh r = sqrt(R^2 - d^2)
+            if (s.Kind == "sphere" && !s.HasActiveSplit)
+            {
+                var sec = s.ComputeAnalyticalRevolutionSection(plane);
+                if (sec.HasIntersection && sec.IsSphereCircle)
+                {
+                    Point ptO = s.Project(new Vec3(0, 0, 0), out _);
+                    Point ptH = s.Project(sec.SphereFootH, out _);
+                    if (sec.SphereDistD > 0.03) dc.DrawLine(MakePen("#DC2626", 1.8, "dashed", false), ptO, ptH);
+                    plane.GetBasis(out Vec3 uRad, out _);
+                    Point ptM = s.Project(sec.SphereFootH + uRad * sec.SphereSectionR, out _);
+                    dc.DrawLine(MakePen("#B45309", 1.6, "dashed", false), ptH, ptM);
+                    dc.DrawEllipse(FrozenBrush(Color.FromRgb(220, 38, 38)), new Pen(Brushes.White, 1.3), ptH, 3.6, 3.6);
+                    var ftH = new FormattedText("H", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 17, FrozenBrush(lblCol), dpi);
+                    dc.DrawText(ftH, new Point(ptH.X - 18, ptH.Y - 16));
+                    var ftRad = new FormattedText("r = √(R² - d²)", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, TfUiSemiBold, 11.5, FrozenBrush(Color.FromRgb(180, 83, 9)), dpi);
+                    dc.DrawText(ftRad, new Point(0.5 * (ptH.X + ptM.X) + 4, 0.5 * (ptH.Y + ptM.Y) - 16));
+                }
+            }
+        }
+
         private static void DrawCutPlaneSheet3D(DrawingContext dc, Solid3DScene s, CutPlane3D plane, Typeface lblTf, double dpi)
         {
             var corners3d = plane.GetQuadCorners();
@@ -3505,15 +3855,20 @@ namespace ScienceWordOverlay
             using (var ctx = geo.Open()) { ctx.BeginFigure(pts[0], true, true); ctx.PolyLineTo(pts.Skip(1).ToList(), true, false); }
             geo.Freeze();
 
-            Color fillCol = ParseColor(plane.PlaneColorHex, 0.20);
-            Color borderCol = ParseColor(plane.PlaneColorHex, 0.85);
-            dc.DrawGeometry(new SolidColorBrush(fillCol), new Pen(new SolidColorBrush(borderCol), 1.6), geo);
+            Color fillCol = Color.FromArgb(32, 99, 102, 241);   // Tim nhat trong suot chuan SGK
+            Color borderCol = Color.FromArgb(215, 79, 70, 229); // Vien net dut tim #4F46E5
+            var planeBorderPen = new Pen(FrozenBrush(borderCol), 1.55)
+            {
+                DashStyle = new DashStyle(new double[] { 6.0, 4.0 }, 0),
+                DashCap = PenLineCap.Flat
+            };
+            planeBorderPen.Freeze();
+            dc.DrawGeometry(FrozenBrush(fillCol), planeBorderPen, geo);
 
-            // Ve nhan mat phang (P) o goc trai-duoi tam mat phang
-            Point cornerP = pts[0];
-            Point insideP = new(cornerP.X + (pts[2].X - cornerP.X) * 0.14, cornerP.Y + (pts[2].Y - cornerP.Y) * 0.14);
-            var ftP = new FormattedText(plane.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 16, new SolidColorBrush(Color.FromRgb(2, 132, 199)), dpi);
-            dc.DrawText(ftP, new Point(insideP.X - ftP.Width * 0.5, insideP.Y - ftP.Height * 0.5));
+            // Ve nhan mat phang (P) in nghieng dam o goc phai-duoi tam mat phang (giong image_dbfab4/dbfad6)
+            Point cornerP = pts.OrderByDescending(p => p.X + p.Y * 0.5).First();
+            var ftP = new FormattedText(plane.Label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, lblTf, 16, FrozenBrush(Color.FromRgb(49, 46, 129)), dpi);
+            dc.DrawText(ftP, new Point(cornerP.X - 24, cornerP.Y + 6));
         }
 
         private void RenderCutPlaneAndAnalyticalSection(DrawingContext dc, Solid3DScene s, CutPlane3D plane, Vec3 vCam, Typeface lblTf, Color lblCol, double dpi)
