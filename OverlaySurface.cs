@@ -21,6 +21,8 @@ namespace ScienceWordOverlay
         public event Action<string, Point?>? ContextMenuRequested;
         public event Action<string>? ActiveToolChanged;
         public event Action<GeoMathFormula>? MathFormulaEditRequested;
+        public event Action<GeoText>? TextEditRequested;
+        public event Action<List<FreeStroke>>? HandwritingEditRequested;
         public event Action<SpinAxisMode>? SpinAxisStateChanged;
         public event Action<bool>? RevHandlesVisibilityChanged;
 
@@ -96,8 +98,9 @@ namespace ScienceWordOverlay
         private string? _selectedPointId;
         private string? _selectedShapeId;
         private string? _selectedMathId;
-        private long _lastMathClickTick = 0;
-        private string? _lastMathClickId;
+        private string? _selectedTextId;
+        private long _lastDblClickTick = 0;
+        private string? _lastDblClickKey;
         private Point _lastSmoothedPenPt;
         private long _lastPenTick = 0;
         // Chọn & Di chuyển toàn bộ nhóm đối tượng (Marquee / HCN / Tự do Lasso)
@@ -450,12 +453,14 @@ namespace ScienceWordOverlay
             foreach (var st in padStrokes) foreach (var pt in st.Points) { if (pt[0] < minX) minX = pt[0]; if (pt[1] < minY) minY = pt[1]; }
             double baseX = ActualWidth > 200 ? ActualWidth * 0.38 : 360;
             double baseY = ActualHeight > 200 ? ActualHeight * 0.36 : 260;
+            string grpId = GenId("hw");
             ClearGroupSelection();
             foreach (var st in padStrokes)
             {
                 var clone = new FreeStroke
                 {
                     Id = GenId("strk"),
+                    GroupId = grpId,
                     ColorHex = st.ColorHex,
                     Width = st.Width,
                     Opacity = st.Opacity,
@@ -468,8 +473,115 @@ namespace ScienceWordOverlay
                 _selStrokeIds.Add(clone.Id);
             }
             SetTool("select");
-            InvalidateVisual(); Refresh2DMenu();
-            ShowToast("Đã chèn chữ viết tay lên bảng vẽ! Kéo để đặt vị trí rồi bấm [Chèn App].", 4000);
+            InvalidateVisual(); RefreshHandwritingMenu();
+            ShowToast("Đã chèn chữ viết tay lên bảng vẽ! Kéo để đặt vị trí, nháy đúp để sửa nét, bấm [Chèn App] để dán.", 4200);
+        }
+
+        public void ReplaceHandwritingCluster(List<string> oldStrokeIds, List<FreeStroke> updatedStrokes)
+        {
+            SaveHistory();
+            var oldSet = new HashSet<string>(oldStrokeIds);
+            Scene.Strokes.RemoveAll(s => oldSet.Contains(s.Id));
+            ClearGroupSelection();
+            string grpId = updatedStrokes.FirstOrDefault(s => !string.IsNullOrEmpty(s.GroupId))?.GroupId ?? GenId("hw");
+            if (string.IsNullOrEmpty(grpId)) grpId = GenId("hw");
+            foreach (var st in updatedStrokes)
+            {
+                if (st.Points.Count == 0) continue;
+                var clone = new FreeStroke
+                {
+                    Id = GenId("strk"),
+                    GroupId = grpId,
+                    ColorHex = st.ColorHex,
+                    Width = st.Width,
+                    Opacity = st.Opacity,
+                    IsHighlighter = st.IsHighlighter,
+                    PenStyle = st.PenStyle,
+                    PointWidths = new List<double>(st.PointWidths),
+                    Points = st.Points.Select(p => new[] { p[0], p[1] }).ToList()
+                };
+                Scene.Strokes.Add(clone);
+                _selStrokeIds.Add(clone.Id);
+            }
+            SetTool("select");
+            InvalidateVisual();
+            if (_selStrokeIds.Count > 0) RefreshHandwritingMenu();
+            else ContextMenuRequested?.Invoke("", null);
+            ShowToast("✓ Đã cập nhật chữ viết tay tại đúng vị trí cũ!");
+        }
+
+        public void UpdateTextItem(string textId, string newText, string colorHex, double fontSize, bool upgradeToMath)
+        {
+            var found = Scene.Texts.FirstOrDefault(t => t.Id == textId);
+            if (found == null)
+            {
+                AddOrUpdateMathFormula(null, newText, colorHex, fontSize, upgradeToMath);
+                return;
+            }
+            SaveHistory();
+            if (upgradeToMath)
+            {
+                double x = found.X, y = found.Y - fontSize * 0.6;
+                Scene.Texts.Remove(found);
+                var mf = new GeoMathFormula
+                {
+                    Id = GenId("math"),
+                    X = x,
+                    Y = y,
+                    Latex = newText,
+                    ColorHex = colorHex,
+                    FontSize = fontSize,
+                    ForceMath = true
+                };
+                Scene.MathFormulas.Add(mf);
+                ClearGroupSelection();
+                _selectedMathId = mf.Id;
+                _selMathIds.Add(mf.Id);
+                SetTool("select");
+                InvalidateVisual(); RefreshMathMenu();
+                ShowToast("✓ Đã nâng cấp văn bản thành Công thức Toán!");
+                return;
+            }
+            found.Text = newText;
+            found.ColorHex = colorHex;
+            found.FontSize = fontSize;
+            ClearGroupSelection();
+            _selectedTextId = found.Id;
+            _selTextIds.Add(found.Id);
+            SetTool("select");
+            InvalidateVisual(); RefreshTextMenu();
+            ShowToast("✓ Đã cập nhật nội dung văn bản!");
+        }
+
+        public void DeleteMathFormulaById(string id)
+        {
+            SaveHistory();
+            Scene.MathFormulas.RemoveAll(m => m.Id == id);
+            ClearGroupSelection();
+            ContextMenuRequested?.Invoke("", null);
+            InvalidateVisual();
+            ShowToast("Đã xóa công thức toán!");
+        }
+
+        public void DeleteTextById(string id)
+        {
+            SaveHistory();
+            Scene.Texts.RemoveAll(t => t.Id == id);
+            ClearGroupSelection();
+            ContextMenuRequested?.Invoke("", null);
+            InvalidateVisual();
+            ShowToast("Đã xóa dòng chữ!");
+        }
+
+        public void DeleteStrokesByIds(List<string> ids)
+        {
+            SaveHistory();
+            var set = new HashSet<string>(ids);
+            Scene.Strokes.RemoveAll(s => set.Contains(s.Id));
+            ClearGroupSelection();
+            ContextMenuRequested?.Invoke("", null);
+            InvalidateVisual();
+            ShowToast("Đã xóa cụm chữ viết tay!");
         }
 
         public void InsertFormulaDirectlyToApp(string latex, string colorHex, double fontSize, bool forceMath)
@@ -535,6 +647,138 @@ namespace ScienceWordOverlay
             ContextMenuRequested?.Invoke("math", new Point(r.Left, r.Top));
         }
 
+        public void EditSelectedText()
+        {
+            var txt = Scene.Texts.FirstOrDefault(t => t.Id == _selectedTextId || _selTextIds.Contains(t.Id));
+            if (txt != null) TextEditRequested?.Invoke(txt);
+        }
+
+        public void ScaleSelectedText(double deltaPx)
+        {
+            var txt = Scene.Texts.FirstOrDefault(t => t.Id == _selectedTextId || _selTextIds.Contains(t.Id));
+            if (txt == null) return;
+            SaveHistory();
+            txt.FontSize = Math.Clamp(txt.FontSize + deltaPx, 12.0, 72.0);
+            InvalidateVisual(); RefreshTextMenu();
+        }
+
+        public void CycleSelectedTextColor()
+        {
+            var txt = Scene.Texts.FirstOrDefault(t => t.Id == _selectedTextId || _selTextIds.Contains(t.Id));
+            if (txt == null) return;
+            _strokeCycleIdx = (_strokeCycleIdx + 1) % StrokePalette.Length;
+            SaveHistory();
+            txt.ColorHex = StrokePalette[_strokeCycleIdx];
+            InvalidateVisual(); RefreshTextMenu();
+        }
+
+        public void EditSelectedHandwriting()
+        {
+            var strokes = Scene.Strokes.Where(s => _selStrokeIds.Contains(s.Id)).ToList();
+            if (strokes.Count > 0) HandwritingEditRequested?.Invoke(strokes);
+        }
+
+        private Rect GetTextRect(GeoText t)
+        {
+            double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var tf = new Typeface(new FontFamily("Times New Roman"), FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
+            var ft = new FormattedText(t.Text ?? "", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, tf, t.FontSize, Brushes.Black, dpi);
+            return new Rect(t.X, t.Y - ft.Height * 0.5, Math.Max(22.0, ft.Width), Math.Max(18.0, ft.Height));
+        }
+
+        private static Rect GetStrokeBounds(FreeStroke st)
+        {
+            if (st.Points.Count == 0) return Rect.Empty;
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var p in st.Points)
+            {
+                if (p[0] < minX) minX = p[0]; if (p[1] < minY) minY = p[1];
+                if (p[0] > maxX) maxX = p[0]; if (p[1] > maxY) maxY = p[1];
+            }
+            double pad = Math.Max(4.0, st.Width * 0.6);
+            return new Rect(minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
+        }
+
+        private FreeStroke? FindNearestStroke(Point pos, double radius = 14.0)
+        {
+            FreeStroke? best = null;
+            double bestD = radius;
+            for (int i = Scene.Strokes.Count - 1; i >= 0; i--)
+            {
+                var st = Scene.Strokes[i];
+                if (st.Points.Count == 0) continue;
+                double tol = Math.Max(bestD, st.Width * 0.65 + 6.0);
+                double d = double.MaxValue;
+                if (st.Points.Count == 1)
+                {
+                    d = Dist(pos, new Point(st.Points[0][0], st.Points[0][1]));
+                }
+                else
+                {
+                    for (int k = 0; k < st.Points.Count - 1; k++)
+                    {
+                        double sd = PointToSegmentDist(pos, new Point(st.Points[k][0], st.Points[k][1]), new Point(st.Points[k + 1][0], st.Points[k + 1][1]));
+                        if (sd < d) d = sd;
+                    }
+                }
+                if (d <= tol && d < bestD) { bestD = d; best = st; }
+            }
+            return best;
+        }
+
+        private List<FreeStroke> GetStrokeCluster(FreeStroke seed)
+        {
+            if (!string.IsNullOrEmpty(seed.GroupId))
+                return Scene.Strokes.Where(s => s.GroupId == seed.GroupId).ToList();
+
+            var visited = new HashSet<string> { seed.Id };
+            var queue = new Queue<FreeStroke>();
+            queue.Enqueue(seed);
+            var result = new List<FreeStroke> { seed };
+
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                var curB = GetStrokeBounds(cur);
+                if (curB.IsEmpty) continue;
+                curB.Inflate(24.0, 16.0);
+                foreach (var other in Scene.Strokes)
+                {
+                    if (visited.Contains(other.Id) || !string.IsNullOrEmpty(other.GroupId)) continue;
+                    var ob = GetStrokeBounds(other);
+                    if (!ob.IsEmpty && curB.IntersectsWith(ob))
+                    {
+                        visited.Add(other.Id);
+                        queue.Enqueue(other);
+                        result.Add(other);
+                    }
+                }
+            }
+            return result;
+        }
+
+        private void RefreshTextMenu()
+        {
+            var txt = Scene.Texts.FirstOrDefault(t => t.Id == _selectedTextId || _selTextIds.Contains(t.Id));
+            if (txt == null) return;
+            var r = GetTextRect(txt);
+            ContextMenuRequested?.Invoke("text", new Point(r.Left, r.Top));
+        }
+
+        private void RefreshHandwritingMenu()
+        {
+            var b = GetGroupSelectionBounds();
+            if (b.HasValue) ContextMenuRequested?.Invoke("handwriting", new Point(b.Value.Left, b.Value.Top));
+        }
+
+        private void RefreshActiveSelectionMenu()
+        {
+            if (_selMathIds.Count == 1 && _selPointIds.Count == 0 && _selStrokeIds.Count == 0 && _selTextIds.Count == 0) RefreshMathMenu();
+            else if (_selTextIds.Count == 1 && _selPointIds.Count == 0 && _selStrokeIds.Count == 0 && _selMathIds.Count == 0) RefreshTextMenu();
+            else if (_selStrokeIds.Count > 0 && _selPointIds.Count == 0 && _selTextIds.Count == 0 && _selMathIds.Count == 0) RefreshHandwritingMenu();
+            else Refresh2DMenu();
+        }
+
         public void CycleSelected2DStrokeColor()
         {
             _strokeCycleIdx = (_strokeCycleIdx + 1) % StrokePalette.Length;
@@ -577,8 +821,40 @@ namespace ScienceWordOverlay
             }
             foreach (var sh in Scene.Shapes.ToList()) if (idMap.ContainsKey(sh.P1Id) && idMap.ContainsKey(sh.P2Id)) Scene.Shapes.Add(new GeoShape { Id = GenId("sh"), Type = sh.Type, P1Id = idMap[sh.P1Id], P2Id = idMap[sh.P2Id], ColorHex = sh.ColorHex, StrokeWidth = sh.StrokeWidth, DashStyle = sh.DashStyle });
             foreach (var reg in Scene.Regions.ToList()) if (reg.PointIds.All(pid => idMap.ContainsKey(pid))) Scene.Regions.Add(new GeoRegion { Id = GenId("reg"), Type = reg.Type, PointIds = reg.PointIds.Select(pid => idMap[pid]).ToList(), ColorHex = reg.ColorHex, Opacity = reg.Opacity, Pattern = reg.Pattern });
+            var newSelTexts = new HashSet<string>();
+            foreach (var tid in _selTextIds.ToList())
+            {
+                var t = Scene.Texts.FirstOrDefault(x => x.Id == tid); if (t == null) continue;
+                var nt = new GeoText { Id = GenId("txt"), X = t.X + 24, Y = t.Y + 24, Text = t.Text, ColorHex = t.ColorHex, FontSize = t.FontSize };
+                Scene.Texts.Add(nt); newSelTexts.Add(nt.Id);
+            }
+            var newSelMath = new HashSet<string>();
+            foreach (var mid in _selMathIds.ToList())
+            {
+                var m = Scene.MathFormulas.FirstOrDefault(x => x.Id == mid); if (m == null) continue;
+                var nm = new GeoMathFormula { Id = GenId("math"), X = m.X + 24, Y = m.Y + 24, Latex = m.Latex, ColorHex = m.ColorHex, FontSize = m.FontSize, ForceMath = m.ForceMath, LayerBelow = m.LayerBelow };
+                Scene.MathFormulas.Add(nm); newSelMath.Add(nm.Id);
+            }
+            var newSelStrokes = new HashSet<string>();
+            string newHwGrp = _selStrokeIds.Count > 0 ? GenId("hw") : "";
+            foreach (var sid in _selStrokeIds.ToList())
+            {
+                var st = Scene.Strokes.FirstOrDefault(x => x.Id == sid); if (st == null) continue;
+                var ns = new FreeStroke
+                {
+                    Id = GenId("strk"), GroupId = newHwGrp, ColorHex = st.ColorHex, Width = st.Width, Opacity = st.Opacity,
+                    IsHighlighter = st.IsHighlighter, PenStyle = st.PenStyle, PointWidths = new List<double>(st.PointWidths),
+                    Points = st.Points.Select(p => new[] { p[0] + 24, p[1] + 24 }).ToList()
+                };
+                Scene.Strokes.Add(ns); newSelStrokes.Add(ns.Id);
+            }
             _selPointIds.Clear(); foreach (var id in newSelPts) _selPointIds.Add(id);
-            InvalidateVisual(); Refresh2DMenu(); ShowToast("Đã nhân bản hình 2D!");
+            _selTextIds.Clear(); foreach (var id in newSelTexts) _selTextIds.Add(id);
+            _selMathIds.Clear(); foreach (var id in newSelMath) _selMathIds.Add(id);
+            _selStrokeIds.Clear(); foreach (var id in newSelStrokes) _selStrokeIds.Add(id);
+            _selectedMathId = newSelMath.FirstOrDefault();
+            _selectedTextId = newSelTexts.FirstOrDefault();
+            InvalidateVisual(); RefreshActiveSelectionMenu(); ShowToast("Đã nhân bản đối tượng đang chọn!");
         }
 
         private Rect GetSolid3DBounds()
@@ -702,9 +978,7 @@ namespace ScienceWordOverlay
             SaveHistory();
             Scene = restored.Value.scene;
             OfficeContext = restored.Value.ctx;
-            ClearGroupSelection();
-            InvalidateVisual();
-            ShowToast("Đã mở lại hình để sửa / vẽ thêm! Sửa xong bấm [Chèn App] để cập nhật đè vào file.", 4500);
+            OnSceneRestoredForEditing("Office");
             return true;
         }
 
@@ -738,9 +1012,7 @@ namespace ScienceWordOverlay
                             SaveHistory();
                             Scene = SceneHistoryStore.MaterializeSceneAt(entry, topLeft, sx, sy);
                             OfficeContext = null;
-                            ClearGroupSelection();
-                            InvalidateVisual();
-                            ShowToast($"Đã mở lại hình #{entry.Id} từ ScienceWord! Sửa xong bấm [Chèn App] để thay thế hình đang chọn.", 4800);
+                            OnSceneRestoredForEditing($"ScienceWord #{entry.Id}");
                             return true;
                         }
                     }
@@ -756,15 +1028,50 @@ namespace ScienceWordOverlay
             var targetPos = new Point(Math.Max(40, entry.OrigLeft), Math.Max(110, entry.OrigTop));
             Scene = SceneHistoryStore.MaterializeSceneAt(entry, targetPos, 1.0, 1.0);
             OfficeContext = null;
+            OnSceneRestoredForEditing(entry.Label);
+        }
+
+        private void OnSceneRestoredForEditing(string sourceLabel)
+        {
             ClearGroupSelection();
+            SetTool("select");
             InvalidateVisual();
-            ShowToast($"Đã mở lại {entry.Label}! Chỉnh sửa xong bấm [Chèn App] để dán lại.", 4200);
+
+            bool hasGeo = Scene.Points.Count > 0 || Scene.Shapes.Count > 0 || Scene.Regions.Count > 0;
+            if (!hasGeo && Scene.MathFormulas.Count == 1 && Scene.Texts.Count == 0 && Scene.Strokes.Count == 0)
+            {
+                var mf = Scene.MathFormulas[0];
+                _selectedMathId = mf.Id; _selMathIds.Add(mf.Id);
+                InvalidateVisual(); RefreshMathMenu();
+                MathFormulaEditRequested?.Invoke(mf);
+                ShowToast($"Đã mở lại Công thức từ {sourceLabel}! Sửa xong bấm [Cập nhật & Chèn App].", 4600);
+                return;
+            }
+            if (!hasGeo && Scene.Texts.Count == 1 && Scene.MathFormulas.Count == 0 && Scene.Strokes.Count == 0)
+            {
+                var t = Scene.Texts[0];
+                _selectedTextId = t.Id; _selTextIds.Add(t.Id);
+                InvalidateVisual(); RefreshTextMenu();
+                TextEditRequested?.Invoke(t);
+                ShowToast($"Đã mở lại Văn bản từ {sourceLabel}! Sửa xong bấm [Cập nhật & Chèn App].", 4600);
+                return;
+            }
+            if (!hasGeo && Scene.Strokes.Count > 0 && Scene.MathFormulas.Count == 0 && Scene.Texts.Count == 0)
+            {
+                foreach (var st in Scene.Strokes) _selStrokeIds.Add(st.Id);
+                InvalidateVisual(); RefreshHandwritingMenu();
+                HandwritingEditRequested?.Invoke(Scene.Strokes.ToList());
+                ShowToast($"Đã mở lại Chữ viết tay từ {sourceLabel}! Chỉnh sửa xong bấm [Cập nhật & Chèn App].", 4600);
+                return;
+            }
+            ShowToast($"Đã mở lại từ {sourceLabel}! Nháy đúp lên Công thức, Văn bản hoặc Chữ viết tay để sửa — xong bấm [Chèn App].", 4800);
         }
 
         private void ClearGroupSelection()
         {
             _selPointIds.Clear(); _selStrokeIds.Clear(); _selTextIds.Clear(); _selMathIds.Clear(); _selMagicIds.Clear();
             _selectedMathId = null;
+            _selectedTextId = null;
             _isDraggingGroup = false;
             _marqueeRect = null;
         }
@@ -784,7 +1091,7 @@ namespace ScienceWordOverlay
             foreach (var tid in _selTextIds)
             {
                 var t = Scene.Texts.FirstOrDefault(x => x.Id == tid);
-                if (t != null) { xs.Add(t.X); xs.Add(t.X + Math.Max(20, t.Text.Length * 11)); ys.Add(t.Y - 16); ys.Add(t.Y + 16); }
+                if (t != null) { var r = GetTextRect(t); xs.Add(r.Left); xs.Add(r.Right); ys.Add(r.Top); ys.Add(r.Bottom); }
             }
             foreach (var mfid in _selMathIds)
             {
@@ -818,7 +1125,7 @@ namespace ScienceWordOverlay
             ClearGroupSelection();
             foreach (var p in Scene.Points) if (inside(new Point(p.X, p.Y))) _selPointIds.Add(p.Id);
             foreach (var st in Scene.Strokes) if (st.Points.Any(pt => inside(new Point(pt[0], pt[1])))) _selStrokeIds.Add(st.Id);
-            foreach (var t in Scene.Texts) if (inside(new Point(t.X, t.Y))) _selTextIds.Add(t.Id);
+            foreach (var t in Scene.Texts) { var r = GetTextRect(t); if (inside(new Point(r.Left + r.Width * 0.5, r.Top + r.Height * 0.5))) _selTextIds.Add(t.Id); }
             foreach (var mf in Scene.MathFormulas) { var r = GetMathFormulaRect(mf); if (inside(new Point(r.Left + r.Width * 0.5, r.Top + r.Height * 0.5))) _selMathIds.Add(mf.Id); }
             foreach (var mf in MagicFills)
             {
@@ -1178,7 +1485,11 @@ namespace ScienceWordOverlay
         private GeoText? FindNearestText(Point pos)
         {
             for (int i = Scene.Texts.Count - 1; i >= 0; i--)
-                if (Math.Abs(pos.X - Scene.Texts[i].X) < 48 && Math.Abs(pos.Y - Scene.Texts[i].Y) < 24) return Scene.Texts[i];
+            {
+                var r = GetTextRect(Scene.Texts[i]);
+                r.Inflate(8, 6);
+                if (r.Contains(pos)) return Scene.Texts[i];
+            }
             return null;
         }
 
@@ -1465,6 +1776,48 @@ namespace ScienceWordOverlay
                 return;
             }
 
+            // 0.4 NHÁY ĐÚP CHỈNH SỬA TRỰC TIẾP: Công thức Toán, Văn bản (Text) & Chữ viết tay (chạy TRƯỚC kéo nhóm!)
+            if (Tool is "select" or "text" or "segment" or "dashed" or "point")
+            {
+                var mDbl = FindNearestMathFormula(pos);
+                var tDbl = mDbl == null ? FindNearestText(pos) : null;
+                var sDbl = (mDbl == null && tDbl == null && Tool == "select") ? FindNearestStroke(pos, 14.0) : null;
+                string? hitKey = mDbl != null ? ("m:" + mDbl.Id) : (tDbl != null ? ("t:" + tDbl.Id) : (sDbl != null ? ("s:" + (string.IsNullOrEmpty(sDbl.GroupId) ? sDbl.Id : sDbl.GroupId)) : null));
+                long nowTick = Environment.TickCount64;
+                bool isDbl = hitKey != null && (e.ClickCount >= 2 || (_lastDblClickKey == hitKey && (nowTick - _lastDblClickTick) < 420));
+                if (isDbl)
+                {
+                    _lastDblClickKey = null;
+                    _lastDblClickTick = 0;
+                    if (mDbl != null)
+                    {
+                        ClearGroupSelection();
+                        _selectedMathId = mDbl.Id; _selMathIds.Add(mDbl.Id);
+                        InvalidateVisual(); RefreshMathMenu();
+                        MathFormulaEditRequested?.Invoke(mDbl);
+                        return;
+                    }
+                    if (tDbl != null)
+                    {
+                        ClearGroupSelection();
+                        _selectedTextId = tDbl.Id; _selTextIds.Add(tDbl.Id);
+                        InvalidateVisual(); RefreshTextMenu();
+                        TextEditRequested?.Invoke(tDbl);
+                        return;
+                    }
+                    if (sDbl != null)
+                    {
+                        var cluster = GetStrokeCluster(sDbl);
+                        ClearGroupSelection();
+                        foreach (var cs in cluster) _selStrokeIds.Add(cs.Id);
+                        InvalidateVisual(); RefreshHandwritingMenu();
+                        HandwritingEditRequested?.Invoke(cluster);
+                        return;
+                    }
+                }
+                if (hitKey != null) { _lastDblClickKey = hitKey; _lastDblClickTick = nowTick; }
+            }
+
             // 0.5 Nếu đang có nhóm đối tượng được chọn và click vào bên trong khung nhóm -> Kéo di chuyển TOÀN BỘ nhóm!
             if (Tool is "select" or "snip_rect" or "snip_lasso" && HasGroupSelection())
             {
@@ -1528,28 +1881,33 @@ namespace ScienceWordOverlay
                 var mHit = FindNearestMathFormula(pos);
                 if (mHit != null)
                 {
-                    long now = Environment.TickCount64;
-                    if (_lastMathClickId == mHit.Id && (now - _lastMathClickTick) < 380)
-                    {
-                        _lastMathClickId = null;
-                        _selectedMathId = mHit.Id;
-                        MathFormulaEditRequested?.Invoke(mHit);
-                        return;
-                    }
-                    _lastMathClickId = mHit.Id; _lastMathClickTick = now;
                     ClearGroupSelection(); SaveHistory();
                     _selectedMathId = mHit.Id; _selMathIds.Add(mHit.Id);
                     _draggingMathId = mHit.Id; _dragMathOffset = new Point(pos.X - mHit.X, pos.Y - mHit.Y);
                     CaptureMouse(); InvalidateVisual(); RefreshMathMenu(); return;
                 }
+                var txt = FindNearestText(pos);
+                if (txt != null)
+                {
+                    ClearGroupSelection(); SaveHistory();
+                    _selectedTextId = txt.Id; _draggingTextId = txt.Id; _selTextIds.Add(txt.Id);
+                    CaptureMouse(); InvalidateVisual(); RefreshTextMenu(); return;
+                }
                 var pt = FindNearestPoint(pos, 13.0);
                 if (pt != null) { ClearGroupSelection(); SaveHistory(); _draggingPointId = pt.Id; _selectedPointId = pt.Id; _selectedShapeId = null; _selPointIds.Add(pt.Id); CaptureMouse(); InvalidateVisual(); Refresh2DMenu(); return; }
-                var txt = FindNearestText(pos);
-                if (txt != null) { ClearGroupSelection(); SaveHistory(); _draggingTextId = txt.Id; _selTextIds.Add(txt.Id); CaptureMouse(); InvalidateVisual(); Refresh2DMenu(); return; }
                 var sh = FindNearestSegment(pos, 12.0) ?? FindNearestCircle(pos, 12.0);
                 if (sh != null) { SaveHistory(); _selectedShapeId = sh.Id; _selectedPointId = null; SelectConnected2DComponent(sh.P1Id); _isDraggingGroup = true; _groupLastPos = pos; CaptureMouse(); InvalidateVisual(); Refresh2DMenu(); return; }
                 var reg = FindRegionContainingPoint(pos);
                 if (reg != null && reg.PointIds.Count > 0) { SaveHistory(); SelectConnected2DComponent(reg.PointIds[0]); _isDraggingGroup = true; _groupLastPos = pos; CaptureMouse(); InvalidateVisual(); Refresh2DMenu(); return; }
+                var strk = FindNearestStroke(pos, 14.0);
+                if (strk != null)
+                {
+                    var cluster = GetStrokeCluster(strk);
+                    ClearGroupSelection(); SaveHistory();
+                    foreach (var cs in cluster) _selStrokeIds.Add(cs.Id);
+                    _isDraggingGroup = true; _groupLastPos = pos;
+                    CaptureMouse(); InvalidateVisual(); RefreshHandwritingMenu(); return;
+                }
                 if (Solid3D != null && GetSolid3DBounds().Contains(pos)) { ClearGroupSelection(); _isMoving3D = true; _orbitLastPos = pos; CaptureMouse(); InvalidateVisual(); RefreshSolid3DMenu(); return; }
 
                 ClearGroupSelection(); ContextMenuRequested?.Invoke("", null);
@@ -1767,7 +2125,7 @@ namespace ScienceWordOverlay
                 InvalidateVisual(); RefreshMathMenu(); return;
             }
             if (_draggingPointId != null) { var pt = GetPoint(_draggingPointId); if (pt != null) { pt.X = pos.X; pt.Y = pos.Y; } InvalidateVisual(); return; }
-            if (_draggingTextId != null) { var txt = Scene.Texts.FirstOrDefault(t => t.Id == _draggingTextId); if (txt != null) { txt.X = pos.X; txt.Y = pos.Y; } InvalidateVisual(); return; }
+            if (_draggingTextId != null) { var txt = Scene.Texts.FirstOrDefault(t => t.Id == _draggingTextId); if (txt != null) { txt.X = pos.X; txt.Y = pos.Y; } InvalidateVisual(); RefreshTextMenu(); return; }
             if (e.LeftButton == MouseButtonState.Pressed && (Tool == "eraser" || (Tool == "pen" && PenTipStyle == "eraser")))
             {
                 if (EraseStrokesNear(pos)) InvalidateVisual();
@@ -1837,7 +2195,7 @@ namespace ScienceWordOverlay
                     ShowToast("Đã khoanh vùng! Bấm [Chụp vùng] (Enter) để Copy ảnh, hoặc [Tô vùng] để tô màu!", 4000);
                 InvalidateVisual();
             }
-            if (wasDraggingGroup) Refresh2DMenu();
+            if (wasDraggingGroup) RefreshActiveSelectionMenu();
             _dragRevRegionIdx = -1;
             _isOrbiting3D = false; _isMoving3D = false; _isOrbitingRev3D = false;
             _draggingPointId = null; _draggingTextId = null; _draggingMathId = null; _activeStroke = null;
@@ -2030,7 +2388,13 @@ namespace ScienceWordOverlay
             // 4. Nét vẽ tay đa chất liệu mượt mà (Bút máy, Bút cọ thanh đậm, Phấn bảng, Bút chì, Nét đứt, Dạ quang)
             foreach (var st in Scene.Strokes)
             {
-                if (st.Points.Count < 2) continue;
+                if (st.Points.Count == 0) continue;
+                if (st.Points.Count == 1)
+                {
+                    double rDot = Math.Max(1.4, st.Width * 0.55);
+                    dc.DrawEllipse(new SolidColorBrush(ParseColor(st.ColorHex, st.Opacity)), null, new Point(st.Points[0][0], st.Points[0][1]), rDot, rDot);
+                    continue;
+                }
                 string pStyle = st.IsHighlighter ? "highlighter" : (st.PenStyle ?? "fountain");
 
                 if ((pStyle is "brush" or "fountain") && st.PointWidths.Count == st.Points.Count)
@@ -2092,7 +2456,14 @@ namespace ScienceWordOverlay
             foreach (var t in Scene.Texts)
             {
                 var ft = new FormattedText(t.Text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, mathTypeface, t.FontSize, new SolidColorBrush(ParseColor(t.ColorHex)), dpi);
-                dc.DrawText(ft, new Point(t.X, t.Y - ft.Height / 2));
+                double topY = t.Y - ft.Height / 2;
+                dc.DrawText(ft, new Point(t.X, topY));
+                if (!cleanExport && (t.Id == _selectedTextId || _selTextIds.Contains(t.Id)))
+                {
+                    var selRect = new Rect(t.X - 4, topY - 3, Math.Max(20, ft.Width) + 8, Math.Max(16, ft.Height) + 6);
+                    dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(18, 37, 99, 235)),
+                        new Pen(new SolidColorBrush(Color.FromRgb(37, 99, 235)), 1.5) { DashStyle = DashStyles.Dash }, selRect, 5, 5);
+                }
             }
             foreach (var mf in Scene.MathFormulas)
             {
@@ -3174,8 +3545,9 @@ namespace ScienceWordOverlay
             }
             foreach (var t in Scene.Texts)
             {
-                xs.Add(t.X - 4); xs.Add(t.X + Math.Max(24, t.Text.Length * (t.FontSize * 0.68)) + 8);
-                ys.Add(t.Y - t.FontSize * 0.8); ys.Add(t.Y + t.FontSize * 0.8);
+                var r = GetTextRect(t);
+                xs.Add(r.Left - 4); xs.Add(r.Right + 4);
+                ys.Add(r.Top - 4); ys.Add(r.Bottom + 4);
             }
             foreach (var mf in Scene.MathFormulas)
             {

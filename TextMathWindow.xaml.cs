@@ -17,7 +17,15 @@ namespace ScienceWordOverlay
         private readonly OverlaySurface _surface;
         private bool _isReady = false;
         public bool AllowRealClose { get; set; } = false;
+
+        // Editing state: "" (create) | "math" | "text" | "handwriting"
+        private string _editingKind = "";
         private string? _editingFormulaId;
+        private string? _editingTextId;
+        private List<string> _editingStrokeIds = new();
+        private string _editingStrokeGroupId = "";
+        private double _editOrigMinX, _editOrigMinY, _editMapPadX, _editMapPadY, _editMapScale = 1.0;
+
         private string _mathColorHex = "#0F172A";
         private double _mathFontSize = 24.0;
         private string _padPenStyle = "fountain";
@@ -84,11 +92,48 @@ namespace ScienceWordOverlay
             };
         }
 
-        public void OpenForCreate(bool penMode = false)
+        private void ResetEditingState()
         {
+            _editingKind = "";
             _editingFormulaId = null;
+            _editingTextId = null;
+            _editingStrokeIds.Clear();
+            _editingStrokeGroupId = "";
+            _editMapScale = 1.0;
             TxtEditBadge.Text = "Tạo mới";
             BtnInsertOverlay.Content = "＋ Chèn lên bảng vẽ";
+            BtnInsertApp.Content = "📥 Chèn vào App";
+            BtnInsertPadOverlay.Content = "＋ Chèn lên bảng vẽ";
+            BtnInsertPadApp.Content = "📥 Chèn vào App";
+            BtnDeleteMathItem.Visibility = Visibility.Collapsed;
+            BtnDeletePadItem.Visibility = Visibility.Collapsed;
+        }
+
+        private void SelectFontSizeCombo(double fontSize)
+        {
+            bool prev = _isReady;
+            _isReady = false;
+            try
+            {
+                int bestIdx = 1;
+                double bestDiff = double.MaxValue;
+                for (int i = 0; i < CbMathFontSize.Items.Count; i++)
+                {
+                    if (CbMathFontSize.Items[i] is ComboBoxItem it && it.Tag is string s &&
+                        double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double v))
+                    {
+                        double d = Math.Abs(v - fontSize);
+                        if (d < bestDiff) { bestDiff = d; bestIdx = i; }
+                    }
+                }
+                CbMathFontSize.SelectedIndex = bestIdx;
+            }
+            finally { _isReady = prev; }
+        }
+
+        public void OpenForCreate(bool penMode = false)
+        {
+            ResetEditingState();
             if (_surface.CanvasBg is CanvasBackgroundMode.ChalkboardGrid or CanvasBackgroundMode.Blackboard)
             {
                 _mathColorHex = "#FFFFFF";
@@ -102,17 +147,150 @@ namespace ScienceWordOverlay
 
         public void OpenForEdit(GeoMathFormula f)
         {
+            ResetEditingState();
+            _editingKind = "math";
             _editingFormulaId = f.Id;
-            TxtEditBadge.Text = "Đang sửa công thức";
+            TxtEditBadge.Text = "Đang sửa Công thức";
             BtnInsertOverlay.Content = "✓ Cập nhật công thức";
+            BtnInsertApp.Content = "📥 Cập nhật & Chèn App";
+            BtnDeleteMathItem.Visibility = Visibility.Visible;
+
+            bool prev = _isReady;
+            _isReady = false;
             TxtFormulaInput.Text = f.Latex;
             _mathColorHex = f.ColorHex;
             _mathFontSize = f.FontSize;
             ChkForceMath.IsChecked = f.ForceMath;
+            _isReady = prev;
+            SelectFontSizeCombo(f.FontSize);
+
             SetMode(false);
             Show();
             Activate();
+            TxtFormulaInput.Focus();
+            TxtFormulaInput.SelectAll();
             RefreshPreview();
+        }
+
+        public void OpenForEditText(GeoText t)
+        {
+            ResetEditingState();
+            _editingKind = "text";
+            _editingTextId = t.Id;
+            TxtEditBadge.Text = "Đang sửa Văn bản (Text)";
+            BtnInsertOverlay.Content = "✓ Cập nhật chữ";
+            BtnInsertApp.Content = "📥 Cập nhật & Chèn App";
+            BtnDeleteMathItem.Visibility = Visibility.Visible;
+
+            bool prev = _isReady;
+            _isReady = false;
+            TxtFormulaInput.Text = t.Text;
+            _mathColorHex = t.ColorHex;
+            _mathFontSize = t.FontSize;
+            ChkForceMath.IsChecked = false;
+            _isReady = prev;
+            SelectFontSizeCombo(t.FontSize);
+
+            SetMode(false);
+            Show();
+            Activate();
+            TxtFormulaInput.Focus();
+            TxtFormulaInput.SelectAll();
+            RefreshPreview();
+        }
+
+        public void OpenForEditHandwriting(List<FreeStroke> cluster)
+        {
+            ResetEditingState();
+            if (cluster == null || cluster.Count == 0) { OpenForCreate(penMode: true); return; }
+
+            _editingKind = "handwriting";
+            _editingStrokeIds = cluster.Select(s => s.Id).ToList();
+            _editingStrokeGroupId = cluster.FirstOrDefault(s => !string.IsNullOrEmpty(s.GroupId))?.GroupId ?? "";
+            TxtEditBadge.Text = $"Đang sửa Chữ viết tay ({cluster.Count} nét)";
+            BtnInsertPadOverlay.Content = "✓ Cập nhật chữ viết";
+            BtnInsertPadApp.Content = "📥 Cập nhật & Chèn App";
+            BtnDeletePadItem.Visibility = Visibility.Visible;
+
+            // Tinh khung bao goc tren man hinh va map gon vao khung viet tay 556x215
+            double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+            foreach (var st in cluster)
+                foreach (var pt in st.Points)
+                {
+                    if (pt[0] < minX) minX = pt[0];
+                    if (pt[1] < minY) minY = pt[1];
+                    if (pt[0] > maxX) maxX = pt[0];
+                    if (pt[1] > maxY) maxY = pt[1];
+                }
+            if (minX > maxX) { OpenForCreate(penMode: true); return; }
+
+            double origW = Math.Max(12.0, maxX - minX);
+            double origH = Math.Max(12.0, maxY - minY);
+            double padW = HandwritingPad.ActualWidth > 60 ? HandwritingPad.ActualWidth : 556.0;
+            double padH = HandwritingPad.ActualHeight > 40 ? HandwritingPad.ActualHeight : 210.0;
+            double margin = 18.0;
+            double scale = Math.Min(1.0, Math.Min((padW - 2 * margin) / origW, (padH - 2 * margin) / origH));
+            scale = Math.Clamp(scale, 0.25, 1.0);
+            double drawW = origW * scale, drawH = origH * scale;
+            double offX = (padW - drawW) * 0.5;
+            double offY = (padH - drawH) * 0.5;
+
+            _editOrigMinX = minX;
+            _editOrigMinY = minY;
+            _editMapPadX = offX;
+            _editMapPadY = offY;
+            _editMapScale = scale;
+
+            _padStrokes.Clear();
+            foreach (var st in cluster)
+            {
+                var mapped = new FreeStroke
+                {
+                    Id = st.Id,
+                    GroupId = st.GroupId,
+                    ColorHex = st.ColorHex,
+                    Width = Math.Max(1.0, st.Width * scale),
+                    Opacity = st.Opacity,
+                    IsHighlighter = st.IsHighlighter,
+                    PenStyle = st.PenStyle,
+                    PointWidths = st.PointWidths.Select(w => Math.Max(0.9, w * scale)).ToList(),
+                    Points = st.Points.Select(p => new[] { offX + (p[0] - minX) * scale, offY + (p[1] - minY) * scale }).ToList()
+                };
+                _padStrokes.Add(mapped);
+            }
+
+            // Dong bo mau & loai but theo net dau tien cua cum dang sua
+            var first = cluster[0];
+            _padColorHex = first.ColorHex;
+            _padWidth = Math.Clamp(first.Width, 1.2, 16.0);
+            _padPenStyle = string.IsNullOrEmpty(first.PenStyle) ? "fountain" : first.PenStyle;
+
+            SetMode(true);
+            Show();
+            Activate();
+            RedrawPad();
+        }
+
+        private List<FreeStroke> MapPadStrokesBackToScreen()
+        {
+            double inv = _editMapScale > 1e-4 ? (1.0 / _editMapScale) : 1.0;
+            var result = new List<FreeStroke>(_padStrokes.Count);
+            foreach (var st in _padStrokes)
+            {
+                result.Add(new FreeStroke
+                {
+                    Id = st.Id,
+                    GroupId = _editingStrokeGroupId,
+                    ColorHex = st.ColorHex,
+                    Width = Math.Clamp(st.Width * inv, 1.0, 32.0),
+                    Opacity = st.Opacity,
+                    IsHighlighter = st.IsHighlighter,
+                    PenStyle = st.PenStyle,
+                    PointWidths = st.PointWidths.Select(w => Math.Clamp(w * inv, 0.9, 36.0)).ToList(),
+                    Points = st.Points.Select(p => new[] { _editOrigMinX + (p[0] - _editMapPadX) * inv, _editOrigMinY + (p[1] - _editMapPadY) * inv }).ToList()
+                });
+            }
+            return result;
         }
 
         private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -179,7 +357,6 @@ namespace ScienceWordOverlay
             try
             {
                 var col = (Color)ColorConverter.ConvertFromString(_mathColorHex);
-                // Neu chon chu trang tren nen preview sang, hien mau toi trong khung xem truoc de de doc
                 if (col.R > 230 && col.G > 230 && col.B > 230) col = Color.FromRgb(15, 23, 42);
                 ImgMathPreview.Source = LatexMathRenderer.RenderPreviewBitmap(txt, col, Math.Min(28, _mathFontSize), 1.35, ChkForceMath.IsChecked == true);
             }
@@ -205,23 +382,49 @@ namespace ScienceWordOverlay
             }
         }
 
-        private void BtnInsertFormulaToOverlay_Click(object sender, RoutedEventArgs e)
+        private bool CommitFormulaOrTextToOverlay()
         {
             string tex = (TxtFormulaInput.Text ?? "").Trim();
-            if (string.IsNullOrEmpty(tex)) { _surface.ShowToast("Hãy nhập nội dung công thức hoặc chữ trước khi chèn!"); return; }
-            _surface.AddOrUpdateMathFormula(_editingFormulaId, tex, _mathColorHex, _mathFontSize, ChkForceMath.IsChecked == true);
-            _editingFormulaId = null;
-            TxtEditBadge.Text = "Tạo mới";
-            BtnInsertOverlay.Content = "＋ Chèn lên bảng vẽ";
+            if (string.IsNullOrEmpty(tex)) { _surface.ShowToast("Hãy nhập nội dung công thức hoặc chữ trước khi cập nhật!"); return false; }
+            bool forceMath = ChkForceMath.IsChecked == true;
+            if (_editingKind == "text" && !string.IsNullOrEmpty(_editingTextId))
+            {
+                _surface.UpdateTextItem(_editingTextId, tex, _mathColorHex, _mathFontSize, upgradeToMath: forceMath);
+            }
+            else
+            {
+                _surface.AddOrUpdateMathFormula(_editingFormulaId, tex, _mathColorHex, _mathFontSize, forceMath);
+            }
+            return true;
+        }
+
+        private void BtnInsertFormulaToOverlay_Click(object sender, RoutedEventArgs e)
+        {
+            if (!CommitFormulaOrTextToOverlay()) return;
+            ResetEditingState();
             Hide();
         }
 
         private void BtnInsertFormulaToApp_Click(object sender, RoutedEventArgs e)
         {
-            string tex = (TxtFormulaInput.Text ?? "").Trim();
-            if (string.IsNullOrEmpty(tex)) { _surface.ShowToast("Hãy nhập công thức hoặc chữ trước khi chèn vào App!"); return; }
+            if (!CommitFormulaOrTextToOverlay()) return;
+            ResetEditingState();
             Hide();
-            _surface.InsertFormulaDirectlyToApp(tex, _mathColorHex, _mathFontSize, ChkForceMath.IsChecked == true);
+            _surface.InsertIntoTargetApp();
+        }
+
+        private void BtnDeleteEditing_Click(object sender, RoutedEventArgs e)
+        {
+            if (_editingKind == "math" && !string.IsNullOrEmpty(_editingFormulaId))
+                _surface.DeleteMathFormulaById(_editingFormulaId);
+            else if (_editingKind == "text" && !string.IsNullOrEmpty(_editingTextId))
+                _surface.DeleteTextById(_editingTextId);
+            else if (_editingKind == "handwriting" && _editingStrokeIds.Count > 0)
+                _surface.DeleteStrokesByIds(_editingStrokeIds);
+            _padStrokes.Clear();
+            HandwritingPad.Children.Clear();
+            ResetEditingState();
+            Hide();
         }
 
         // ================= HANDWRITING PAD (SMOOTH BEZIER) =================
@@ -255,6 +458,13 @@ namespace ScienceWordOverlay
             }
         }
 
+        private void BtnPadRecolorAll_Click(object sender, RoutedEventArgs e)
+        {
+            if (_padStrokes.Count == 0) return;
+            foreach (var st in _padStrokes) st.ColorHex = _padColorHex;
+            RedrawPad();
+        }
+
         private void BtnPadUndo_Click(object sender, RoutedEventArgs e)
         {
             if (_padStrokes.Count > 0) { _padStrokes.RemoveAt(_padStrokes.Count - 1); RedrawPad(); }
@@ -276,18 +486,19 @@ namespace ScienceWordOverlay
                 return;
             }
             bool isHl = _padPenStyle == "highlighter";
-            double baseW = isHl ? Math.Max(14.0, _padWidth * 3.5) : _padWidth;
+            double scaleW = _editingKind == "handwriting" ? _editMapScale : 1.0;
+            double baseW = (isHl ? Math.Max(14.0, _padWidth * 3.5) : _padWidth) * scaleW;
             _activePadStroke = new FreeStroke
             {
                 Id = "pad_" + DateTime.Now.Ticks,
                 ColorHex = _padColorHex,
-                Width = baseW,
+                Width = Math.Max(1.0, baseW),
                 Opacity = isHl ? 0.36 : (_padPenStyle == "pencil" ? 0.80 : 1.0),
                 IsHighlighter = isHl,
                 PenStyle = _padPenStyle
             };
             _activePadStroke.Points.Add(new[] { p.X, p.Y });
-            _activePadStroke.PointWidths.Add(baseW);
+            _activePadStroke.PointWidths.Add(_activePadStroke.Width);
             _padStrokes.Add(_activePadStroke);
             _lastSmoothedPadPt = p;
             _lastPadTick = Environment.TickCount64;
@@ -302,7 +513,6 @@ namespace ScienceWordOverlay
             if (_padPenStyle == "eraser") { ErasePadNear(raw); return; }
             if (_activePadStroke == null) return;
 
-            // EMA smoothing cho chu viet tay min mang khong rang cua
             Point p = new(_lastSmoothedPadPt.X * 0.42 + raw.X * 0.58, _lastSmoothedPadPt.Y * 0.42 + raw.Y * 0.58);
             double d = Math.Sqrt(Math.Pow(p.X - _lastSmoothedPadPt.X, 2) + Math.Pow(p.Y - _lastSmoothedPadPt.Y, 2));
             if (d < 1.3) return;
@@ -346,11 +556,21 @@ namespace ScienceWordOverlay
             HandwritingPad.Children.Clear();
             foreach (var st in _padStrokes)
             {
-                if (st.Points.Count < 2) continue;
+                if (st.Points.Count == 0) continue;
                 var col = (Color)ColorConverter.ConvertFromString(st.ColorHex);
                 if (col.R > 235 && col.G > 235 && col.B > 235) col = Color.FromRgb(15, 23, 42);
                 col.A = (byte)Math.Clamp(st.Opacity * 255.0, 20, 255);
                 var br = new SolidColorBrush(col);
+
+                if (st.Points.Count == 1)
+                {
+                    double r = Math.Max(1.5, st.Width * 0.55);
+                    var dot = new Ellipse { Width = r * 2, Height = r * 2, Fill = br };
+                    Canvas.SetLeft(dot, st.Points[0][0] - r);
+                    Canvas.SetTop(dot, st.Points[0][1] - r);
+                    HandwritingPad.Children.Add(dot);
+                    continue;
+                }
 
                 if ((st.PenStyle is "brush" or "fountain") && st.PointWidths.Count == st.Points.Count)
                 {
@@ -396,28 +616,46 @@ namespace ScienceWordOverlay
             _surface.PenTipStyle = _padPenStyle;
             _surface.StrokeColorHex = _padColorHex;
             _surface.StrokeWidth = _padWidth;
-            _surface.SetTool(_padPenStyle == "highlighter" ? "highlighter" : "pen");
+            _surface.SetTool(_padPenStyle == "highlighter" ? "highlighter" : (_padPenStyle == "eraser" ? "eraser" : "pen"));
             Hide();
             _surface.ShowToast($"Đã bật bút viết mịn ({_padPenStyle}) trực tiếp trên màn hình!", 3500);
         }
 
+        private bool CommitPadToOverlay()
+        {
+            if (_editingKind == "handwriting" && _editingStrokeIds.Count > 0)
+            {
+                if (_padStrokes.Count == 0)
+                {
+                    _surface.DeleteStrokesByIds(_editingStrokeIds);
+                    return true;
+                }
+                var mapped = MapPadStrokesBackToScreen();
+                _surface.ReplaceHandwritingCluster(_editingStrokeIds, mapped);
+                return true;
+            }
+            if (_padStrokes.Count == 0) { _surface.ShowToast("Bảng viết đang trống!"); return false; }
+            _surface.AddHandwritingStrokes(_padStrokes);
+            return true;
+        }
+
         private void BtnInsertPadToOverlay_Click(object sender, RoutedEventArgs e)
         {
-            if (_padStrokes.Count == 0) { _surface.ShowToast("Bảng viết đang trống!"); return; }
-            _surface.AddHandwritingStrokes(_padStrokes);
+            if (!CommitPadToOverlay()) return;
             _padStrokes.Clear();
             HandwritingPad.Children.Clear();
+            ResetEditingState();
             Hide();
         }
 
         private void BtnInsertPadToApp_Click(object sender, RoutedEventArgs e)
         {
-            if (_padStrokes.Count == 0) { _surface.ShowToast("Bảng viết đang trống!"); return; }
-            var copy = _padStrokes.ToList();
+            if (!CommitPadToOverlay()) return;
             _padStrokes.Clear();
             HandwritingPad.Children.Clear();
+            ResetEditingState();
             Hide();
-            _surface.InsertStrokesDirectlyToApp(copy);
+            _surface.InsertIntoTargetApp();
         }
     }
 }

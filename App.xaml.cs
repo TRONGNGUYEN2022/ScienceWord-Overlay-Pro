@@ -30,7 +30,7 @@ namespace ScienceWordOverlay
             toolbar.Owner = overlay;
             toolbar.Show();
 
-            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.4 (Fix Text-Math + Ẩn nút cận cam + Quay 3D Trục Đứng & Trục Ngang + Mặt phẳng cắt (P) + Bút viết mịn) sẵn sàng!");
+            overlay.Surface.ShowToast("ScienceWord Overlay Universal v10.5 (Nháy đúp sửa trực tiếp Text, Chữ viết tay & Công thức Toán + Quay 3D Đứng/Ngang + Ẩn cận + Mặt phẳng (P)) sẵn sàng!");
         }
     }
 }

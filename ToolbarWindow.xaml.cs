@@ -61,6 +61,14 @@ namespace ScienceWordOverlay
             {
                 EnsureTextMathWindow().OpenForEdit(mf);
             };
+            _overlay.Surface.TextEditRequested += txt =>
+            {
+                EnsureTextMathWindow().OpenForEditText(txt);
+            };
+            _overlay.Surface.HandwritingEditRequested += cluster =>
+            {
+                EnsureTextMathWindow().OpenForEditHandwriting(cluster);
+            };
             _overlay.Surface.SpinAxisStateChanged += axis =>
             {
                 if (BtnAutoSpin3D != null) BtnAutoSpin3D.Content = axis == SpinAxisMode.Vertical ? "⏸ Đứng" : "⟳ Đứng";

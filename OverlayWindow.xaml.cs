@@ -138,6 +138,27 @@ namespace ScienceWordOverlay
                 row1.Children.Add(MakeCtxBtn("A－", () => Surface.ScaleSelectedMathFormula(-3)));
                 row1.Children.Add(MakeCtxBtn("A＋", () => Surface.ScaleSelectedMathFormula(3)));
                 row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSelectedMathColor(), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("📋 Nhân bản", () => Surface.DuplicateSelected2D(), "#0F766E"));
+                row1.Children.Add(MakeCtxBtn("📥 Chèn App", () => Surface.InsertIntoTargetApp(), "#059669"));
+                row1.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                ContextMenuItems.Children.Add(row1);
+            }
+            else if (kind == "text")
+            {
+                row1.Children.Add(MakeCtxBtn("✏️ Sửa chữ", () => Surface.EditSelectedText(), "#D97706"));
+                row1.Children.Add(MakeCtxBtn("A－", () => Surface.ScaleSelectedText(-3)));
+                row1.Children.Add(MakeCtxBtn("A＋", () => Surface.ScaleSelectedText(3)));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu", () => Surface.CycleSelectedTextColor(), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("📋 Nhân bản", () => Surface.DuplicateSelected2D(), "#0F766E"));
+                row1.Children.Add(MakeCtxBtn("📥 Chèn App", () => Surface.InsertIntoTargetApp(), "#059669"));
+                row1.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
+                ContextMenuItems.Children.Add(row1);
+            }
+            else if (kind == "handwriting")
+            {
+                row1.Children.Add(MakeCtxBtn("✏️ Sửa nét viết", () => Surface.EditSelectedHandwriting(), "#D97706"));
+                row1.Children.Add(MakeCtxBtn("🎨 Màu nét", () => Surface.CycleSelected2DStrokeColor(), "#1D4ED8"));
+                row1.Children.Add(MakeCtxBtn("📋 Nhân bản", () => Surface.DuplicateSelected2D(), "#0F766E"));
                 row1.Children.Add(MakeCtxBtn("📥 Chèn App", () => Surface.InsertIntoTargetApp(), "#059669"));
                 row1.Children.Add(MakeCtxBtn("🗑 Xóa", () => { Surface.DeleteSelected(); ContextMenuBar.Visibility = Visibility.Collapsed; }, "#DC2626"));
                 ContextMenuItems.Children.Add(row1);

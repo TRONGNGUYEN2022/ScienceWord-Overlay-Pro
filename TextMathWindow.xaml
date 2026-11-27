@@ -126,8 +126,9 @@
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnDeleteMathItem" Visibility="Collapsed" Content="🗑 Xóa" Padding="8,6" Margin="0,0,6,0" Background="#DC2626" Foreground="White" BorderBrush="#B91C1C" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnDeleteEditing_Click"/>
                         <Button x:Name="BtnInsertOverlay" Content="＋ Chèn lên bảng vẽ" Padding="10,6" Margin="0,0,6,0" Background="#D97706" Foreground="White" BorderBrush="#B45309" FontWeight="Bold" FontSize="11.5" Cursor="Hand" Click="BtnInsertFormulaToOverlay_Click"/>
-                        <Button Content="📥 Chèn vào App" Padding="10,6" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" FontWeight="Bold" FontSize="11.5" Cursor="Hand" Click="BtnInsertFormulaToApp_Click"/>
+                        <Button x:Name="BtnInsertApp" Content="📥 Chèn vào App" Padding="10,6" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" FontWeight="Bold" FontSize="11.5" Cursor="Hand" Click="BtnInsertFormulaToApp_Click"/>
                     </StackPanel>
                 </Grid>
             </StackPanel>
@@ -163,6 +164,7 @@
                         <ComboBoxItem Content="14.0" Tag="14.0"/>
                     </ComboBox>
                     <Button Content="↩" Padding="6,2" Margin="0,0,4,0" Click="BtnPadUndo_Click" ToolTip="Hoàn tác nét vừa viết"/>
+                    <Button Content="🎨 Tô lại màu" Padding="6,2" Margin="0,0,4,0" Background="#EFF6FF" Foreground="#1D4ED8" BorderBrush="#93C5FD" FontSize="10.5" FontWeight="SemiBold" Click="BtnPadRecolorAll_Click" ToolTip="Đổi màu toàn bộ nét chữ đang có trên bảng sang màu đang chọn"/>
                     <Button Content="Xóa bảng" Padding="7,2" Background="#FFF1F2" Foreground="#BE123C" BorderBrush="#FDA4AF" Click="BtnPadClear_Click"/>
                 </WrapPanel>
 
@@ -179,8 +181,9 @@
                 <Grid>
                     <Button Content="✍️ Viết trực tiếp trên màn hình" Padding="10,6" HorizontalAlignment="Left" Background="#0F766E" Foreground="White" BorderBrush="#0D9488" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnWriteOnScreen_Click"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="＋ Chèn lên bảng vẽ" Padding="9,6" Margin="0,0,6,0" Background="#D97706" Foreground="White" BorderBrush="#B45309" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnInsertPadToOverlay_Click"/>
-                        <Button Content="📥 Chèn vào App" Padding="9,6" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnInsertPadToApp_Click"/>
+                        <Button x:Name="BtnDeletePadItem" Visibility="Collapsed" Content="🗑 Xóa" Padding="8,6" Margin="0,0,6,0" Background="#DC2626" Foreground="White" BorderBrush="#B91C1C" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnDeleteEditing_Click"/>
+                        <Button x:Name="BtnInsertPadOverlay" Content="＋ Chèn lên bảng vẽ" Padding="9,6" Margin="0,0,6,0" Background="#D97706" Foreground="White" BorderBrush="#B45309" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnInsertPadToOverlay_Click"/>
+                        <Button x:Name="BtnInsertPadApp" Content="📥 Chèn vào App" Padding="9,6" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" FontWeight="Bold" FontSize="11" Cursor="Hand" Click="BtnInsertPadToApp_Click"/>
                     </StackPanel>
                 </Grid>
             </StackPanel>
